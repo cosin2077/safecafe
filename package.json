@@ -1,0 +1,44 @@
+{
+  "name": "safecafe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Guided Safenet staking web app and CLI with a calm consumer-grade experience.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "safecafe": "./cli/dist/index.js"
+  },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "pnpm build:web && pnpm build:cli",
+    "build:web": "tsc -b && vite build",
+    "build:cli": "cd cli && tsup --config tsup.config.ts",
+    "build:cli:bun": "pnpm build:cli && bun build cli/dist/index.js --compile --outfile cli/dist-bin/safecafe",
+    "preview": "vite preview --host 0.0.0.0",
+    "cli": "tsx cli/index.ts",
+    "cli:packed": "node cli/dist/index.js",
+    "cli:bun": "bun cli/index.ts",
+    "check": "tsc -b --noEmit"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "5.1.4",
+    "commander": "14.0.2",
+    "lucide-react": "0.563.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "viem": "2.46.2",
+    "vite": "7.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.13",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "tsup": "8.5.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  },
+  "packageManager": "pnpm@11.0.0-rc.0"
+}

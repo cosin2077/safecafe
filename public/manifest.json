@@ -1,0 +1,10 @@
+{
+  "name": "Safecafe",
+  "short_name": "Safecafe",
+  "description": "Guided non-custodial Safenet staking interface and CLI.",
+  "theme_color": "#0f8b6f",
+  "background_color": "#fbfbf7",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/"
+}
