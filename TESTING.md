@@ -25,6 +25,8 @@ This builds the CLI and exercises the packaged `safecafe` command in mock mode. 
 
 It also verifies Safe Transaction Builder payload export and checks that old command names such as `brew`, `cool`, `tab`, and `beans` are no longer exposed.
 
+The CLI test also checks that live sending is exposed only through explicit advanced flags and that raw private keys are not accepted as command-line arguments.
+
 ## System Smoke Tests
 
 Run:

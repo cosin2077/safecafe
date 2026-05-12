@@ -1,4 +1,6 @@
-import { writeFileSync } from "node:fs"
+import { readFileSync, writeFileSync } from "node:fs"
+import { createInterface } from "node:readline/promises"
+import { stdin as input, stdout as outputStream } from "node:process"
 import { createWalletClient, http, type Hex } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
 import { mainnet } from "viem/chains"
@@ -15,6 +17,12 @@ export type CliGlobalOptions = {
   rpc?: string
   json?: boolean
   mock?: boolean
+}
+
+export type SigningOptions = {
+  privateKeyPrompt?: boolean
+  privateKeyStdin?: boolean
+  privateKeyEnv?: string
 }
 
 export type SendPlanOptions = {
@@ -40,19 +48,54 @@ export function createProductPublicClient(
   return createSafenetPublicClient(resolveRpcUrl(globals, env, envNames))
 }
 
-export function readPrivateKey(envName: string | undefined, env: Record<string, string | undefined>): Hex {
-  if (!envName) throw new Error("--private-key-env is required with --send")
-  const privateKey = env[envName] as Hex | undefined
-  if (!privateKey) throw new Error(`Missing private key in ${envName}`)
-  return privateKey
-}
-
 export function output(globals: Pick<CliGlobalOptions, "json">, payload: unknown, printText: () => void) {
   if (globals.json) {
     console.log(stringifyBigInts(payload))
     return
   }
   printText()
+}
+
+export async function readSigningPrivateKey(
+  options: SigningOptions,
+  env: Record<string, string | undefined>,
+): Promise<Hex> {
+  const sourceCount = Number(!!options.privateKeyPrompt) + Number(!!options.privateKeyStdin) + Number(!!options.privateKeyEnv)
+  if (sourceCount !== 1) {
+    throw new Error("Choose exactly one signing key source: --private-key-prompt, --private-key-stdin, or --private-key-env <name>.")
+  }
+
+  if (options.privateKeyPrompt) return normalizePrivateKey(await promptHidden("Private key (input hidden): "))
+  if (options.privateKeyStdin) return normalizePrivateKey(readFileSync(0, "utf8"))
+
+  const value = options.privateKeyEnv ? env[options.privateKeyEnv] : undefined
+  if (!value) throw new Error(`Missing private key in ${options.privateKeyEnv}`)
+  return normalizePrivateKey(value)
+}
+
+async function promptHidden(prompt: string): Promise<string> {
+  if (!input.isTTY) throw new Error("--private-key-prompt requires an interactive terminal")
+
+  const rl = createInterface({ input, output: outputStream })
+  const hidden = rl as unknown as { _writeToOutput: (text: string) => void }
+  hidden._writeToOutput = (text: string) => {
+    if (text.includes(prompt)) outputStream.write(prompt)
+  }
+
+  try {
+    return await rl.question(prompt)
+  } finally {
+    rl.close()
+    outputStream.write("\n")
+  }
+}
+
+function normalizePrivateKey(value: string): Hex {
+  const privateKey = value.trim()
+  if (!/^0x[0-9a-fA-F]{64}$/.test(privateKey)) {
+    throw new Error("Private key must be a 0x-prefixed 32-byte hex string.")
+  }
+  return privateKey as Hex
 }
 
 export function printPlan(plan: TxPlan) {
@@ -78,12 +121,13 @@ export function writeSafePayloadFile(plan: TxPlan, path: string, description: st
 
 export async function sendPlanTransactions(plan: TxPlan, options: SendPlanOptions) {
   const account = privateKeyToAccount(options.privateKey)
+  const rpcUrl = options.rpcUrl || DEFAULT_RPC_URLS[0]
   const walletClient = createWalletClient({
     account,
     chain: mainnet,
-    transport: http(options.rpcUrl || DEFAULT_RPC_URLS[0]),
+    transport: http(rpcUrl),
   })
-  const publicClient = createSafenetPublicClient(options.rpcUrl)
+  const publicClient = createSafenetPublicClient(rpcUrl)
 
   for (const tx of plan.txs) {
     const hash = await walletClient.sendTransaction({

@@ -55,6 +55,21 @@ try {
       throw new Error(`Old command name is still exposed: ${oldCommand}`)
     }
   }
+
+  const signingHelp = [
+    hiddenCommands,
+    ...["stake", "unstake", "claim-withdrawal", "claim-rewards"].map((command) =>
+      execFileSync(process.execPath, [cli, command, "--help"], { encoding: "utf8" }),
+    ),
+  ].join("\n")
+  for (const signingFlag of ["--send", "--private-key-prompt", "--private-key-stdin", "--private-key-env"]) {
+    if (!signingHelp.includes(signingFlag)) {
+      throw new Error(`Expected advanced signing flag to be exposed: ${signingFlag}`)
+    }
+  }
+  if (signingHelp.includes("--private-key <")) {
+    throw new Error("Raw private-key command argument must not be exposed")
+  }
 } finally {
   rmSync(workdir, { recursive: true, force: true })
 }

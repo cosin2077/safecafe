@@ -12,6 +12,7 @@ Safecafe never takes custody of funds. Users review and sign transactions from t
 - Reward proof loading and Merkle root comparison
 - Safe Transaction Builder JSON export
 - Scriptable CLI for protocol status, validators, staking, withdrawals, rewards, and contract addresses
+- CLI transaction planning, Safe payload export, and explicit EOA hot-wallet sending
 - English and Chinese UI copy
 - Static frontend deployment with no proprietary backend requirement
 
@@ -68,6 +69,8 @@ pnpm cli:packed status --mock
 
 After building, the package exposes the `safecafe` binary from `cli/dist/index.js`.
 
+The CLI is safest as a read-only planning and Safe Transaction Builder export tool. Advanced EOA users can submit transactions with `--send --private-key-prompt --yes` or pipe a key with `--private-key-stdin`; raw private keys are never accepted as command-line arguments.
+
 ## Testing
 
 See [TESTING.md](TESTING.md) for the integration and system smoke-test strategy.
@@ -87,6 +90,7 @@ The output in `dist/` can be deployed to Vercel, Cloudflare Pages, IPFS-style st
 - Safecafe is non-custodial and prepares transactions for user review and signing.
 - Keep `.env` files local. `.env.example` is the only environment file intended for git.
 - Treat any exposed private key as compromised and replace it immediately.
+- Prefer Safe payload export or hidden/private stdin signing over environment variables.
 - Report security issues privately before opening public issues.
 
 ## License

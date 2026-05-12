@@ -107,15 +107,17 @@ program
 
 program
   .command("stake")
-  .description("Plan or send a stake transaction")
+  .description("Plan, export, or send a stake transaction")
   .requiredOption("--validator <address-or-name>", "Validator address or known label")
   .requiredOption("--amount <safe>", "SAFE amount")
   .option("--account <address>", "Account used for planning")
   .option("--dry-run", "Only print the transaction plan", true)
   .option("--safe-payload <path>", "Write a Safe Transaction Builder JSON payload")
-  .option("--send", "Send transactions with a local private key")
-  .option("--private-key-env <name>", "Environment variable containing private key")
-  .option("--yes", "Confirm live transaction sending")
+  .option("--send", "Submit the planned transactions from a local EOA hot wallet")
+  .option("--private-key-prompt", "Prompt for the private key with hidden terminal input")
+  .option("--private-key-stdin", "Read the private key from stdin")
+  .option("--private-key-env <name>", "Read the private key from an environment variable")
+  .option("--yes", "Confirm live transaction submission")
   .action(async (options: WriteOptions & { validator: string; amount: string }) => {
     const globals = program.opts<GlobalOptions>()
     const validator = await resolveValidator(options.validator, globals.mock)
@@ -127,15 +129,17 @@ program
 
 program
   .command("unstake")
-  .description("Plan or send an unstake transaction")
+  .description("Plan, export, or send an unstake transaction")
   .requiredOption("--validator <address-or-name>", "Validator address or known label")
   .requiredOption("--amount <safe>", "SAFE amount")
   .option("--account <address>", "Account used for planning")
   .option("--dry-run", "Only print the transaction plan", true)
   .option("--safe-payload <path>", "Write a Safe Transaction Builder JSON payload")
-  .option("--send", "Send transactions with a local private key")
-  .option("--private-key-env <name>", "Environment variable containing private key")
-  .option("--yes", "Confirm live transaction sending")
+  .option("--send", "Submit the planned transactions from a local EOA hot wallet")
+  .option("--private-key-prompt", "Prompt for the private key with hidden terminal input")
+  .option("--private-key-stdin", "Read the private key from stdin")
+  .option("--private-key-env <name>", "Read the private key from an environment variable")
+  .option("--yes", "Confirm live transaction submission")
   .action(async (options: WriteOptions & { validator: string; amount: string }) => {
     const globals = program.opts<GlobalOptions>()
     const validator = await resolveValidator(options.validator, globals.mock)
@@ -175,13 +179,15 @@ program
 
 program
   .command("claim-withdrawal")
-  .description("Plan or send a withdrawal claim")
+  .description("Plan, export, or send a withdrawal claim")
   .option("--account <address>", "Account used for planning")
   .option("--dry-run", "Only print the transaction plan", true)
   .option("--safe-payload <path>", "Write a Safe Transaction Builder JSON payload")
-  .option("--send", "Send transactions with a local private key")
-  .option("--private-key-env <name>", "Environment variable containing private key")
-  .option("--yes", "Confirm live transaction sending")
+  .option("--send", "Submit the planned transactions from a local EOA hot wallet")
+  .option("--private-key-prompt", "Prompt for the private key with hidden terminal input")
+  .option("--private-key-stdin", "Read the private key from stdin")
+  .option("--private-key-env <name>", "Read the private key from an environment variable")
+  .option("--yes", "Confirm live transaction submission")
   .action(async (options: WriteOptions) => {
     const globals = program.opts<GlobalOptions>()
     const account = resolvePlanningAccount(options, globals)
@@ -223,13 +229,15 @@ program
 
 program
   .command("claim-rewards")
-  .description("Plan or send a reward claim")
+  .description("Plan, export, or send a reward claim")
   .requiredOption("--account <address>", "Reward account")
   .option("--dry-run", "Only print the transaction plan", true)
   .option("--safe-payload <path>", "Write a Safe Transaction Builder JSON payload")
-  .option("--send", "Send transactions with a local private key")
-  .option("--private-key-env <name>", "Environment variable containing private key")
-  .option("--yes", "Confirm live transaction sending")
+  .option("--send", "Submit the planned transactions from a local EOA hot wallet")
+  .option("--private-key-prompt", "Prompt for the private key with hidden terminal input")
+  .option("--private-key-stdin", "Read the private key from stdin")
+  .option("--private-key-env <name>", "Read the private key from an environment variable")
+  .option("--yes", "Confirm live transaction submission")
   .action(async (options: WriteOptions & { account: string }) => {
     const globals = program.opts<GlobalOptions>()
     const account = parseAddress(options.account, "account")

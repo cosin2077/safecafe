@@ -1,7 +1,6 @@
 import { privateKeyToAccount } from "viem/accounts"
 import type { Address } from "viem"
 import {
-  DEFAULT_RPC_URLS,
   fetchRewardProof,
   fetchValidators,
   findValidator,
@@ -17,7 +16,7 @@ import {
   createProductPublicClient,
   output,
   printPlan,
-  readPrivateKey,
+  readSigningPrivateKey,
   resolveRpcUrl,
   sendPlanTransactions,
   writeSafePayloadFile,
@@ -32,6 +31,8 @@ export type WriteOptions = {
   dryRun?: boolean
   send?: boolean
   yes?: boolean
+  privateKeyPrompt?: boolean
+  privateKeyStdin?: boolean
   privateKeyEnv?: string
   safePayload?: string
 }
@@ -46,8 +47,7 @@ export function createClient(globals: GlobalOptions) {
 export function resolvePlanningAccount(options: WriteOptions, globals: GlobalOptions): Address | undefined {
   if (globals.mock) return undefined
   if (options.account) return parseAddress(options.account, "account")
-  if (options.send) return privateKeyToAccount(readPrivateKey(options.privateKeyEnv, process.env)).address
-  throw new Error("--account is required for live planning. Use --send with --private-key-env for EOA sending.")
+  throw new Error("--account is required for live planning and sending.")
 }
 
 export async function resolveValidator(query: string, mock?: boolean): Promise<Address> {
@@ -123,7 +123,9 @@ export async function assertRewardsClaimable(globals: GlobalOptions, account: Ad
 }
 
 export async function handlePlan(globals: GlobalOptions, plan: TxPlan, options: WriteOptions) {
+  if (options.send && options.safePayload) throw new Error("--send cannot be combined with --safe-payload")
   if (globals.mock && options.send) throw new Error("--mock cannot be combined with --send")
+  if (globals.json && options.send) throw new Error("--json cannot be combined with --send")
 
   if (options.safePayload) {
     const payload = writeSafePayloadFile(plan, options.safePayload, safePayloadDescription)
@@ -138,13 +140,32 @@ export async function handlePlan(globals: GlobalOptions, plan: TxPlan, options: 
   }
 
   output(globals, plan, () => printPlan(plan))
-
   if (!options.send) return
-  if (!options.yes) throw new Error("--yes is required with --send to confirm live transaction submission")
 
+  if (!options.yes) throw new Error("--yes is required with --send to confirm live transaction submission")
+  if (!plan.account) throw new Error("--account is required with --send")
+
+  const client = createClient(globals)
+  const code = await client.getCode({ address: plan.account })
+  if (code && code !== "0x") {
+    throw new Error("--send only supports EOA hot-wallet accounts. Use --safe-payload for Safe contract accounts.")
+  }
+
+  if (options.privateKeyEnv) {
+    console.error("Warning: environment-variable signing is intended for controlled automation only.")
+    console.error("Do not store private keys in .env files, shell history, shared CI variables, or logs.")
+  }
+  const privateKey = await readSigningPrivateKey(options, process.env)
+  const signer = privateKeyToAccount(privateKey)
+  if (signer.address.toLowerCase() !== plan.account.toLowerCase()) {
+    throw new Error(`Signing key resolves to ${signer.address}, but --account is ${plan.account}.`)
+  }
+
+  console.error("Safecafe will submit live transactions from the local EOA account.")
+  console.error("The private key is used in memory for this run only; prefer --private-key-prompt or --private-key-stdin.")
   await sendPlanTransactions(plan, {
-    privateKey: readPrivateKey(options.privateKeyEnv, process.env),
-    rpcUrl: resolveRpcUrl(globals, process.env, rpcEnvNames) || DEFAULT_RPC_URLS[0],
+    privateKey,
+    rpcUrl: resolveRpcUrl(globals, process.env, rpcEnvNames),
     onSubmitted: (label, hash) => console.log(`Submitted ${label}: ${hash}`),
     onConfirmed: (label, blockNumber) => console.log(`Confirmed ${label}: block ${blockNumber}`),
   })
