@@ -19,6 +19,10 @@ type RawValidator = {
   participation_rate_14d?: unknown
 }
 
+type FetchValidatorsOptions = {
+  fallback?: boolean
+}
+
 const fallbackValidators: ValidatorInfo[] = [
   {
     address: "0xCc00DE0eA14c08669b26DcBFE365dBD9890B04D9",
@@ -80,7 +84,10 @@ function toValidator(raw: RawValidator): ValidatorInfo | null {
   }
 }
 
-export async function fetchValidators(urls: string | readonly string[] = DEFAULT_VALIDATOR_INFO_URLS): Promise<ValidatorInfo[]> {
+export async function fetchValidators(
+  urls: string | readonly string[] = DEFAULT_VALIDATOR_INFO_URLS,
+  options: FetchValidatorsOptions = {},
+): Promise<ValidatorInfo[]> {
   const candidates = Array.isArray(urls) ? urls : [urls]
   let lastError: Error | null = null
 
@@ -93,6 +100,10 @@ export async function fetchValidators(urls: string | readonly string[] = DEFAULT
     }
   }
 
+  if (options.fallback === false) {
+    throw lastError ?? new Error("No validator metadata was available from the configured URLs.")
+  }
+
   if (lastError) {
     console.warn("Failed to fetch validator info from all URLs, using fallback data:", lastError.message)
   }
@@ -100,19 +111,15 @@ export async function fetchValidators(urls: string | readonly string[] = DEFAULT
 }
 
 async function fetchValidatorsFromUrl(url: string): Promise<ValidatorInfo[] | null> {
-  try {
-    const response = await fetch(url)
-    if (response.status === 404) return null
-    if (!response.ok) throw new Error(`Failed to fetch validators: ${response.status}`)
-    const text = await response.text()
-    const sanitized = text.replace(/,\s*,/g, ",").replace(/,\s*([}\]])/g, "$1")
-    const json: unknown = JSON.parse(sanitized)
-    if (!Array.isArray(json)) return null
-    const validators = json.map((entry) => toValidator(entry as RawValidator)).filter(Boolean)
-    return validators.length ? (validators as ValidatorInfo[]) : null
-  } catch {
-    return null
-  }
+  const response = await fetch(url)
+  if (response.status === 404) return null
+  if (!response.ok) throw new Error(`Failed to fetch validators: ${response.status}`)
+  const text = await response.text()
+  const sanitized = text.replace(/,\s*,/g, ",").replace(/,\s*([}\]])/g, "$1")
+  const json: unknown = JSON.parse(sanitized)
+  if (!Array.isArray(json)) return null
+  const validators = json.map((entry) => toValidator(entry as RawValidator)).filter(Boolean)
+  return validators.length ? (validators as ValidatorInfo[]) : null
 }
 
 export function findValidator(validators: ValidatorInfo[], query: string): ValidatorInfo | null {

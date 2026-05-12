@@ -1,5 +1,5 @@
 import { writeFileSync } from "node:fs"
-import { createWalletClient, http, type Address, type Hex } from "viem"
+import { createWalletClient, http, type Hex } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
 import { mainnet } from "viem/chains"
 import {
