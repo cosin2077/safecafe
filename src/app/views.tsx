@@ -5,8 +5,8 @@ import {
   Clock3,
   Copy,
   Database,
-  FileText,
   Gift,
+  Info,
   ShieldCheck,
   TerminalSquare,
   Upload,
@@ -24,7 +24,9 @@ import {
 } from "./formatters"
 import type { MessageBundle } from "./i18n"
 import type { AccountSummary, Action, DataStatus, Modal, NavItem } from "./types"
-import { ActionButton, FullPanel, InfoCard, KeyValue, Progress, StatusBadge } from "./ui"
+import { ActionButton, CustomSelect, FullPanel, InfoCard, KeyValue, Progress, StatusBadge, Tooltip } from "./ui"
+
+type ValidatorSort = "stake" | "participation" | "commission" | "name" | "yourStake"
 
 export function DashboardView(props: {
   t: MessageBundle
@@ -35,6 +37,7 @@ export function DashboardView(props: {
   connectedAccount: Address | null
   copyText: (value: string) => Promise<void>
   exportSafePayload: () => void
+  isLoadingValidators: boolean
   isSubmitting: boolean
   modal: Modal
   onConnect: () => Promise<void>
@@ -60,21 +63,21 @@ export function DashboardView(props: {
   validatorPoolTotal: bigint
 }) {
   const { t } = props
-  const hasOperators = props.validators.length > 0
+  const hasValidators = props.validators.length > 0
   const accountActionLabel = props.connectedAccount ? t.refreshLive : t.connectWallet
   return (
     <div className="content-grid enter">
       <div className="main-stack">
         <section className="panel primary-actions-panel">
           <div className="action-grid">
-            <ActionButton active={props.action === "stake"} icon={<Upload />} title="Stake" subtitle={t.stakeSub} onClick={() => props.selectAction("stake")} />
-            <ActionButton active={props.action === "unstake"} icon={<ArrowDownToLine />} title="Unstake" subtitle={t.unstakeSub} onClick={() => props.selectAction("unstake")} />
-            <ActionButton active={props.action === "claim-rewards"} icon={<Gift />} title="Claim Rewards" subtitle={t.claimRewardsSub} onClick={() => props.selectAction("claim-rewards")} />
+            <ActionButton active={props.action === "stake"} icon={<Upload />} title={t.txStakeTitle} subtitle={t.stakeSub} onClick={() => props.selectAction("stake")} />
+            <ActionButton active={props.action === "unstake"} icon={<ArrowDownToLine />} title={t.txUnstakeTitle} subtitle={t.unstakeSub} onClick={() => props.selectAction("unstake")} />
+            <ActionButton active={props.action === "claim-rewards"} icon={<Gift />} title={t.claimRewards} subtitle={t.claimRewardsSub} onClick={() => props.selectAction("claim-rewards")} />
           </div>
           {(props.action === "stake" || props.action === "unstake") && (
             <div className="form-row slide-down">
               <label>
-                Amount to {props.action === "stake" ? "Stake" : "Unstake"}
+                {props.action === "stake" ? t.stakeAction : t.unstakeAction} {t.amount}
                 <div className="amount-input-wrap">
                   <input disabled={!props.accountReady} inputMode="decimal" value={props.amount} placeholder="0.00" onChange={(event) => props.setAmount(event.target.value)} />
                   <span>SAFE</span>
@@ -82,15 +85,21 @@ export function DashboardView(props: {
                 </div>
               </label>
               <label>
-                Select Access Route
-                <select disabled={!hasOperators} value={props.validator} onChange={(event) => props.setValidator(event.target.value as Address)}>
-                  {props.validators.map((item) => (
-                    <option key={item.address} value={item.address}>{item.label}</option>
-                  ))}
-                </select>
+                {t.validator}
+                <CustomSelect
+                  disabled={!hasValidators}
+                  label={t.validator}
+                  value={props.validator}
+                  onChange={(value) => props.setValidator(value as Address)}
+                  options={props.validators.map((item) => ({
+                    value: item.address,
+                    label: item.label,
+                    detail: compactAddress(item.address, 8, 6),
+                  }))}
+                />
               </label>
               <button className="primary-button" onClick={() => void (props.accountReady ? props.buildPlan() : props.onConnect())}>
-                {!props.accountReady ? accountActionLabel : props.action === "stake" ? "Stake SAFE" : "Unstake SAFE"}
+                {!props.accountReady ? accountActionLabel : props.action === "stake" ? t.stakeAction : t.unstakeAction}
               </button>
             </div>
           )}
@@ -108,22 +117,28 @@ export function DashboardView(props: {
         <StakingOverview t={t} accountReady={props.accountReady} summary={props.summary} safePriceUsd={props.safePriceUsd} />
       </aside>
 
-      <section className="panel distribution-panel operators-panel">
+      <section className="panel distribution-panel validators-panel">
         <div className="panel-title">
-          <h2>Available Operators</h2>
-          <button className="soft-button" onClick={() => props.setActiveNav("operators")}>View All Operators <ArrowUpRight size={15} /></button>
+          <h2>{t.stakingDistribution}</h2>
+          <button className="soft-button" onClick={() => props.setActiveNav("validators")}>{t.viewAllValidators} <ArrowUpRight size={15} /></button>
         </div>
         <ValidatorTable
           t={t}
           validators={props.visibleValidators.slice(0, 3)}
           totalStaked={props.validatorPoolTotal}
           accountReady={props.dataStatus.isLive}
+          emptyMessage={t.validatorInfoFailed}
+          isLoading={props.isLoadingValidators}
           setModal={props.setModal}
           openExplorer={props.openExplorer}
           safePriceUsd={props.safePriceUsd}
           onStake={(nextValidator) => {
             props.setValidator(nextValidator)
             props.selectAction("stake")
+          }}
+          onUnstake={(nextValidator) => {
+            props.setValidator(nextValidator)
+            props.selectAction("unstake")
           }}
         />
       </section>
@@ -136,60 +151,144 @@ export function ValidatorTable(props: {
   validators: ValidatorInfo[]
   totalStaked: bigint
   accountReady: boolean
+  emptyMessage?: string
+  isLoading?: boolean
   safePriceUsd: number | null
   setModal: (modal: Modal) => void
   openExplorer: (address: Address) => void
   onStake: (address: Address) => void
+  onUnstake: (address: Address) => void
 }) {
   const { t } = props
   return (
     <div className="validator-list">
       <div className="validator-header">
-        <span>Operator</span>
-        <span>Track</span>
-        <span>Uptime (30d)</span>
-        <span>Open Source</span>
-        <span>Status</span>
-        <span />
+        <span>{t.validator}</span>
+        <span>{t.commission}</span>
+        <span>{t.participation14d}</span>
+        <span>{t.totalSafeStaked}</span>
+        <span>{t.yourStake}</span>
+        <span>{t.status}</span>
+        <span>{t.actions}</span>
       </div>
-      {props.validators.map((item, index) => {
-        const track = index === 0 ? "Track A" : "Track B"
-        const uptime = item.participationRate
+      {props.isLoading && Array.from({ length: 4 }).map((_, index) => (
+        <div className="validator-row validator-row-skeleton" key={`validator-skeleton-${index}`}>
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+      ))}
+      {props.validators.map((item) => {
         return (
-          <article className="validator-card-row" key={item.address}>
-            <div className="validator-card-main">
-              <div className="validator-cell">
-              <span className="validator-icon">{item.label.slice(0, 1)}</span>
-              <span>
-                <strong>{item.label}</strong>
-                <small>{compactAddress(item.address, 10, 6)}</small>
-              </span>
-              </div>
+          <article className="validator-row" key={item.address}>
+            <div className="validator-identity">
+              <strong>{item.label}</strong>
+              <button type="button" onClick={() => props.openExplorer(item.address)}>{compactAddress(item.address, 6, 4)}</button>
             </div>
-            <div className="validator-card-metrics">
-              <span className={`track-badge ${track === "Track A" ? "track-a" : "track-b"}`}>{track}</span>
-              <ValidatorStat label={t.participation} value={`${uptime.toFixed(2)}%`} progress={<Progress value={uptime} variant="green" />} />
-              <span className="open-source">
-                {index === 1 ? <FileText size={16} /> : <CheckCircle2 size={16} />}
-                {index === 1 ? "Docs" : "Yes"}
-              </span>
-              <StatusBadge status={item.status} t={t} />
-              <button className="row-arrow" title={t.more} onClick={() => props.setModal({ type: "validator", validator: item })}>›</button>
+            <ValidatorStat label={t.commission} tooltip={t.commissionTooltip} value={`${item.commission}%`} />
+            <ValidatorStat
+              label={t.participation14d}
+              tooltip={t.participationTooltip}
+              value={`${item.participationRate.toFixed(2)}%`}
+              progress={<Progress value={item.participationRate} variant="green" />}
+            />
+            <ValidatorStat label={t.totalSafeStaked} tooltip={t.totalSafeStakedTooltip} value={formatSafe(item.totalStake)} />
+            <ValidatorStat label={t.yourStake} tooltip={t.yourStakeTooltip} value={props.accountReady ? formatSafe(item.userStake) : "--"} />
+            <StatusBadge status={item.status} t={t} />
+            <div className="validator-row-actions">
+              <button className="primary-button" type="button" disabled={item.status !== "active"} onClick={() => props.onStake(item.address)}>
+                {t.stakeAction}
+              </button>
+              <Tooltip className="validator-action-tooltip" label={props.accountReady ? t.yourStakeTooltip : t.connectWalletHint}>
+                <button className="secondary-action-button" type="button" disabled={!props.accountReady || item.userStake <= 0n} onClick={() => props.onUnstake(item.address)}>
+                  {t.unstakeAction}
+                </button>
+              </Tooltip>
+              <button className="row-arrow" type="button" title={t.more} onClick={() => props.setModal({ type: "validator", validator: item })}>›</button>
             </div>
           </article>
         )
       })}
-      {props.validators.length === 0 && (
-        <div className="empty-state validator-empty"><Database size={24} /><p>{t.validatorInfoFailed}</p></div>
+      {!props.isLoading && props.validators.length === 0 && (
+        <div className="empty-state validator-empty"><Database size={24} /><p>{props.emptyMessage ?? t.validatorInfoFailed}</p></div>
       )}
     </div>
   )
 }
 
-function ValidatorStat(props: { label: string; value: string; detail?: string; progress?: ReactNode }) {
+export function ValidatorToolbar(props: {
+  activeOnly: boolean
+  isLoading: boolean
+  query: string
+  setActiveOnly: (value: boolean) => void
+  setQuery: (value: string) => void
+  setSort: (value: ValidatorSort) => void
+  shownCount: number
+  sort: ValidatorSort
+  t: MessageBundle
+  totalCount: number
+  updatedBlock: bigint | null
+  validatorLoadError: string
+}) {
+  const sortOptions: Array<{ value: ValidatorSort; label: string }> = [
+    { value: "stake", label: props.t.sortStake },
+    { value: "participation", label: props.t.sortParticipation },
+    { value: "commission", label: props.t.sortCommission },
+    { value: "name", label: props.t.sortName },
+    { value: "yourStake", label: props.t.sortYourStake },
+  ]
+  return (
+    <div className="validator-toolbar">
+      <div className="validator-search">
+        <input
+          aria-label={props.t.searchValidators}
+          placeholder={props.t.searchValidators}
+          value={props.query}
+          onChange={(event) => props.setQuery(event.target.value)}
+        />
+      </div>
+      <CustomSelect
+        label={props.t.sortBy}
+        value={props.sort}
+        onChange={(value) => props.setSort(value as ValidatorSort)}
+        options={sortOptions}
+      />
+      <button
+        className={`segmented-toggle ${props.activeOnly ? "active" : ""}`}
+        type="button"
+        onClick={() => props.setActiveOnly(!props.activeOnly)}
+      >
+        {props.activeOnly ? props.t.activeOnly : props.t.allValidators}
+      </button>
+      <div className={`validator-data-note ${props.validatorLoadError ? "warning" : ""}`}>
+        <strong>{props.isLoading ? props.t.loadingValidators : `${props.shownCount}/${props.totalCount} ${props.t.validatorsShown}`}</strong>
+        <small>
+          {props.validatorLoadError
+            ? props.validatorLoadError
+            : props.updatedBlock
+              ? `${props.t.dataUpdated}: ${props.t.block} ${props.updatedBlock}`
+              : props.t.liveData}
+        </small>
+      </div>
+    </div>
+  )
+}
+
+function ValidatorStat(props: { label: string; value: string; detail?: string; progress?: ReactNode; tooltip?: string }) {
   return (
     <div className="validator-stat">
-      <small>{props.label}</small>
+      <small>
+        {props.label}
+        {props.tooltip && (
+          <Tooltip label={props.tooltip}>
+            <Info size={15} />
+          </Tooltip>
+        )}
+      </small>
       <strong>{props.value}</strong>
       {props.detail && <em>{props.detail}</em>}
       {props.progress}
@@ -205,20 +304,20 @@ function StakingOverview({ t, accountReady, summary, safePriceUsd }: { t: Messag
 
   return (
     <section className="panel overview-panel">
-      <h2>Staking Overview</h2>
+      <h2>{t.stakingOverview}</h2>
       <div className="overview-layout">
         <div className="overview-copy">
-          <small>Total Balance</small>
+          <small>{t.safeBalance}</small>
           <strong>{formattedTotal} SAFE</strong>
           <em>{accountReady ? formatUsdFromSafe(totalBalance, safePriceUsd) : t.connectWallet}</em>
           <div className="overview-legend">
-            <span><i className="staked-dot" />Staked <b>{accountReady ? `${formatSafe(summary.totalStaked)} SAFE (${stakedShare.toFixed(1)}%)` : "--"}</b></span>
-            <span><i />Unstaked <b>{accountReady ? `${formatSafe(summary.safeBalance)} SAFE (${safeBalanceShare.toFixed(1)}%)` : "--"}</b></span>
+            <span><i className="staked-dot" />{t.totalStaked} <b>{accountReady ? `${formatSafe(summary.totalStaked)} SAFE (${stakedShare.toFixed(1)}%)` : "--"}</b></span>
+            <span><i />{t.safeBalance} <b>{accountReady ? `${formatSafe(summary.safeBalance)} SAFE (${safeBalanceShare.toFixed(1)}%)` : "--"}</b></span>
           </div>
         </div>
         <div className={`donut ${accountReady ? "" : "empty"}`} style={{ "--staked": `${accountReady ? stakedShare : 0}%` } as CSSProperties}>
           <div>
-            <small>Total Balance</small>
+            <small>{t.safeBalance}</small>
             <strong>{formattedTotal}</strong>
             <span>SAFE</span>
             <em>{accountReady ? formatUsdFromSafe(totalBalance, safePriceUsd) : t.notConnected}</em>
@@ -226,7 +325,7 @@ function StakingOverview({ t, accountReady, summary, safePriceUsd }: { t: Messag
         </div>
       </div>
       <div className="overview-footer">
-        <span>Uptime Target</span>
+        <span>{t.participation}</span>
         <strong>95%+</strong>
       </div>
     </section>
@@ -439,7 +538,7 @@ export function CliView(props: { t: MessageBundle; account: Address | null; vali
     "pnpm install",
     "pnpm cli guide",
     `pnpm cli status --account ${account}`,
-    "pnpm cli operators --active --sort participation",
+    "pnpm cli validators --active --sort participation",
     `pnpm cli stake --account ${account} --validator ${props.validator} --amount ${props.amount || "100"} --dry-run`,
     `pnpm cli --rpc https://eth.llamarpc.com rewards --account ${account}`,
     "safecafe status --mock",

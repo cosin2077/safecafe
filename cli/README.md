@@ -16,7 +16,7 @@ pnpm cli:packed status --mock
 ```bash
 safecafe guide
 safecafe status --account 0xYourAddress
-safecafe operators --active
+safecafe validators --active
 safecafe stake --account 0xYourAddress --validator "Core Contributors" --amount 100 --dry-run
 safecafe unstake --account 0xYourAddress --validator "Core Contributors" --amount 25 --dry-run
 safecafe withdrawals --account 0xYourAddress

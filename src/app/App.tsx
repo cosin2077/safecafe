@@ -2,9 +2,13 @@ import {
   Database,
   Gift,
   Home,
+  Languages,
   Menu,
   Settings,
   Shield,
+  CircleAlert,
+  CircleCheck,
+  Info,
   Upload,
   Users,
   Wallet,
@@ -60,9 +64,10 @@ import {
   type SafePriceState,
   type Toast,
 } from "./types"
-import { DashboardView, DocsView, RewardsView, ValidatorTable } from "./views"
+import { DashboardView, DocsView, RewardsView, ValidatorTable, ValidatorToolbar } from "./views"
 
 const navPaths = createPathMap(navItems)
+type ValidatorSort = "stake" | "participation" | "commission" | "name" | "yourStake"
 
 const navFromPath = (pathname: string): NavItem => resolveNavFromPath(pathname, navItems, navPaths, "dashboard")
 const navMeta: Record<NavItem, { label: string; icon: typeof Home }> = {
@@ -70,12 +75,16 @@ const navMeta: Record<NavItem, { label: string; icon: typeof Home }> = {
   stake: { label: "Stake", icon: Database },
   unstake: { label: "Unstake", icon: Upload },
   rewards: { label: "Rewards", icon: Gift },
-  operators: { label: "Operators", icon: Users },
+  validators: { label: "Validators", icon: Users },
   settings: { label: "Settings", icon: Settings },
 }
 
 export function App() {
-  const [locale] = useState<Locale>("en")
+  const [locale, setLocale] = useState<Locale>(() => {
+    const saved = window.localStorage.getItem("safecafe:locale")
+    if (saved === "en" || saved === "zh") return saved
+    return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en"
+  })
   const [activeNav, setActiveNav] = useState<NavItem>(() => navFromPath(window.location.pathname))
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [account, setAccount] = useState<Address | null>(null)
@@ -85,6 +94,8 @@ export function App() {
   const [txPlan, setTxPlan] = useState<TxPlan | null>(null)
   const [modal, setModal] = useState<Modal>(null)
   const [showOnlyActive, setShowOnlyActive] = useState(false)
+  const [validatorQuery, setValidatorQuery] = useState("")
+  const [validatorSort, setValidatorSort] = useState<ValidatorSort>("stake")
   const [toasts, setToasts] = useState<Toast[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [liveSnapshot, setLiveSnapshot] = useState<AccountSnapshot | null>(null)
@@ -92,7 +103,9 @@ export function App() {
   const [liveBlock, setLiveBlock] = useState<bigint | null>(null)
   const [liveError, setLiveError] = useState("")
   const [isReadingLive, setIsReadingLive] = useState(false)
+  const [isLoadingValidators, setIsLoadingValidators] = useState(true)
   const [validators, setValidators] = useState<ValidatorInfo[]>([])
+  const [validatorLoadError, setValidatorLoadError] = useState("")
   const [rewardProof, setRewardProof] = useState<Awaited<ReturnType<typeof fetchRewardProof>> | null>(null)
   const [liveMerkleRoot, setLiveMerkleRoot] = useState<string | null>(null)
   const [chainId, setChainId] = useState<number | null>(null)
@@ -107,11 +120,27 @@ export function App() {
     [validator, validators],
   )
   const hasLiveAccountData = Boolean(account && liveSnapshot)
-  const visibleValidators = showOnlyActive
-    ? validators.filter((item) => item.status === "active")
-    : validators
+  const visibleValidators = useMemo(() => {
+    const query = validatorQuery.trim().toLowerCase()
+    const filtered = validators.filter((item) => {
+      const activeMatch = !showOnlyActive || item.status === "active"
+      const queryMatch = !query || item.label.toLowerCase().includes(query) || item.address.toLowerCase().includes(query)
+      return activeMatch && queryMatch
+    })
+    return [...filtered].sort((a, b) => {
+      if (validatorSort === "name") return a.label.localeCompare(b.label)
+      if (validatorSort === "commission") return a.commission - b.commission
+      if (validatorSort === "participation") return b.participationRate - a.participationRate
+      if (validatorSort === "yourStake") return compareBigintDesc(a.userStake, b.userStake)
+      return compareBigintDesc(a.totalStake, b.totalStake)
+    })
+  }, [showOnlyActive, validatorQuery, validatorSort, validators])
   const validatorPoolTotal = useMemo(
     () => validators.reduce((sum, item) => sum + item.totalStake, 0n),
+    [validators],
+  )
+  const dashboardValidators = useMemo(
+    () => [...validators].sort((a, b) => compareBigintDesc(a.totalStake, b.totalStake)),
     [validators],
   )
   const summary = useMemo(() => {
@@ -194,6 +223,8 @@ export function App() {
   }, [amount, validator])
 
   useEffect(() => {
+    setIsLoadingValidators(true)
+    setValidatorLoadError("")
     fetchValidators(undefined, { fallback: false }).then(async (items) => {
       const client = createSafenetPublicClient(import.meta.env.VITE_RPC_URL)
       setValidatorStakeError("")
@@ -204,7 +235,11 @@ export function App() {
       setValidators(validatorsWithTotals)
       setValidator((current) => findValidator(validatorsWithTotals, current)?.address ?? validatorsWithTotals[0]?.address ?? current)
     }).catch((error) => {
-      toast(error instanceof Error ? error.message : t.validatorInfoFailed, "warning")
+      const message = error instanceof Error ? error.message : t.validatorInfoFailed
+      setValidatorLoadError(message)
+      toast(message, "warning")
+    }).finally(() => {
+      setIsLoadingValidators(false)
     })
   }, [t.validatorInfoFailed])
 
@@ -248,12 +283,22 @@ export function App() {
     }
   }, [])
 
-  function toast(message: string, tone: Toast["tone"] = "info") {
-    const id = Date.now()
-    setToasts((current) => [...current, { id, message, tone }])
+  function toast(message: string, tone: Toast["tone"] = "info", title?: string) {
+    const id = Date.now() + Math.random()
+    setToasts((current) => [...current.slice(-3), { id, message, tone, title }])
     window.setTimeout(() => {
       setToasts((current) => current.filter((item) => item.id !== id))
-    }, 2600)
+    }, message.length > 120 ? 6200 : 3600)
+  }
+
+  function closeToast(id: number) {
+    setToasts((current) => current.filter((item) => item.id !== id))
+  }
+
+  function switchLocale() {
+    const nextLocale: Locale = locale === "en" ? "zh" : "en"
+    setLocale(nextLocale)
+    window.localStorage.setItem("safecafe:locale", nextLocale)
   }
 
   function navigate(nextNav: NavItem) {
@@ -334,6 +379,7 @@ export function App() {
       setLiveSnapshot(snapshot)
       setLiveBlock(health.blockNumber)
       setLiveMerkleRoot(health.merkleRoot)
+      setValidatorLoadError("")
       setValidators(await readValidatorPositions(client, target, validatorMetadata))
 
       try {
@@ -559,8 +605,8 @@ export function App() {
           <button className="brand" onClick={() => navigate("dashboard")} aria-label="Safecafe dashboard">
             <div className="brand-mark"><span>S</span></div>
             <div>
-              <strong>SAFENET</strong>
-              <span>BETA</span>
+              <strong>SAFECAFE</strong>
+              <span>STAKING</span>
             </div>
           </button>
 
@@ -581,13 +627,17 @@ export function App() {
                 return (
                   <button className={activeNav === item ? "active" : ""} key={item} onClick={() => navigate(item)}>
                     <Icon size={20} />
-                    {navMeta[item].label}
+                    {t[item]}
                   </button>
                 )
               })}
             </nav>
 
           <div className="topbar-status">
+              <button className="language-pill" onClick={switchLocale} aria-label={t.switchLanguage}>
+                <Languages size={17} />
+                <span>{locale === "en" ? "中文" : "EN"}</span>
+              </button>
               <button className="wallet-pill" onClick={() => account ? setModal({ type: "wallet" }) : connectWallet()}>
                 <Wallet size={18} />
                 <span>
@@ -600,7 +650,7 @@ export function App() {
           </div>
           <div className="sidebar-project">
             <Shield size={22} />
-            <strong>Safenet Beta</strong>
+            <strong>Safecafe</strong>
             <ChevronDown size={17} />
           </div>
           <span className="sidebar-version">Version 1.0.0-beta</span>
@@ -609,7 +659,7 @@ export function App() {
 
       <main className="page">
         <div className="dashboard-topline">
-          <h1>Safenet Beta Staking</h1>
+          <h1>{t.appTitle}</h1>
         </div>
         <section className="summary-card enter">
           <div className="section-heading">
@@ -654,6 +704,7 @@ export function App() {
             accountReady={hasLiveAccountData}
             connectedAccount={connectedAccount}
             copyText={copyText}
+            isLoadingValidators={isLoadingValidators}
             isSubmitting={isSubmitting}
             modal={modal}
             onConnect={refreshOrConnect}
@@ -670,8 +721,8 @@ export function App() {
             txProgress={txProgress}
             txPlan={txPlan?.action === action ? txPlan : null}
             validator={validator}
-            visibleValidators={displayValidators}
-            validators={displayValidators}
+            visibleValidators={dashboardValidators}
+            validators={dashboardValidators}
             buildPlan={buildPlan}
             setShowOnlyActive={setShowOnlyActive}
             dataStatus={dataStatus}
@@ -681,13 +732,29 @@ export function App() {
             validatorPoolTotal={validatorPoolTotal}
           />
         )}
-        {activeNav === "operators" && (
-          <FullPanel title="Available Operators">
+        {activeNav === "validators" && (
+          <FullPanel title={t.stakingDistribution}>
+            <ValidatorToolbar
+              activeOnly={showOnlyActive}
+              isLoading={isLoadingValidators}
+              query={validatorQuery}
+              setActiveOnly={setShowOnlyActive}
+              setQuery={setValidatorQuery}
+              setSort={setValidatorSort}
+              shownCount={displayValidators.length}
+              sort={validatorSort}
+              t={t}
+              totalCount={validators.length}
+              updatedBlock={liveBlock}
+              validatorLoadError={validatorLoadError}
+            />
             <ValidatorTable
               t={t}
               validators={displayValidators}
               totalStaked={validatorPoolTotal}
               accountReady={hasLiveAccountData}
+              emptyMessage={validatorQuery || showOnlyActive ? t.noValidatorsMatched : validatorLoadError || t.validatorInfoFailed}
+              isLoading={isLoadingValidators}
               setModal={setModal}
               openExplorer={openExplorer}
               safePriceUsd={displaySafePriceUsd}
@@ -695,6 +762,11 @@ export function App() {
                 setValidator(nextValidator)
                 selectAction("stake")
                 navigate("stake")
+              }}
+              onUnstake={(nextValidator) => {
+                setValidator(nextValidator)
+                selectAction("unstake")
+                navigate("unstake")
               }}
             />
           </FullPanel>
@@ -738,11 +810,30 @@ export function App() {
       )}
       <div className="toast-stack" aria-live="polite">
         {toasts.map((item) => (
-          <div className={`toast ${item.tone ?? "info"}`} key={item.id}>
-            {item.message}
-          </div>
+          <ToastItem closeLabel={t.closeNotification} item={item} key={item.id} notificationLabel={t.notification} onClose={() => closeToast(item.id)} />
         ))}
       </div>
     </div>
   )
+}
+
+function ToastItem(props: { closeLabel: string; item: Toast; notificationLabel: string; onClose: () => void }) {
+  const Icon = props.item.tone === "success" ? CircleCheck : props.item.tone === "warning" ? CircleAlert : Info
+  return (
+    <div className={`toast ${props.item.tone ?? "info"}`}>
+      <Icon size={18} />
+      <span>
+        <strong>{props.item.title ?? props.notificationLabel}</strong>
+        <small>{props.item.message}</small>
+      </span>
+      <button type="button" onClick={props.onClose} aria-label={props.closeLabel}>
+        <X size={16} />
+      </button>
+    </div>
+  )
+}
+
+function compareBigintDesc(a: bigint, b: bigint) {
+  if (a === b) return 0
+  return a > b ? -1 : 1
 }

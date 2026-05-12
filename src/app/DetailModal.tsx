@@ -1,7 +1,7 @@
 import { ArrowUpRight, Copy, X } from "lucide-react"
-import type { ReactNode } from "react"
+import { useEffect, type ReactNode } from "react"
 import type { Address } from "viem"
-import { CHAIN_ID, compactAddress } from "../protocol"
+import { CHAIN_ID, compactAddress, formatSafe } from "../protocol"
 import { merkleLabel } from "./formatters"
 import type { MessageBundle } from "./i18n"
 import type { DataStatus, Modal } from "./types"
@@ -18,11 +18,32 @@ export function DetailModal(props: {
   t: MessageBundle
 }) {
   const { account, dataStatus, modal, onClose, t } = props
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose()
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [onClose])
+
   let title = t.viewReadiness
   let content: ReactNode = <p>{t.readinessDescription}</p>
   if (modal.type === "validator") {
     title = modal.validator.label
-    content = <><KeyValue label={t.address} value={compactAddress(modal.validator.address, 10, 8)} /><KeyValue label={t.participation} value={`${modal.validator.participationRate}%`} /><KeyValue label={t.commission} value={`${modal.validator.commission}%`} /></>
+    content = (
+      <>
+        <KeyValue label={t.address} value={compactAddress(modal.validator.address, 10, 8)} />
+        <KeyValue label={t.status} value={modal.validator.status === "active" ? t.active : t.inactive} />
+        <KeyValue label={t.participation14d} value={`${modal.validator.participationRate.toFixed(2)}%`} />
+        <KeyValue label={t.commission} value={`${modal.validator.commission}%`} />
+        <KeyValue label={t.totalSafeStaked} value={`${formatSafe(modal.validator.totalStake)} SAFE`} />
+        <KeyValue label={t.yourStake} value={`${formatSafe(modal.validator.userStake)} SAFE`} />
+        <div className="modal-actions">
+          <button className="soft-button" onClick={() => props.copyText(modal.validator.address)}><Copy size={15} />{t.copy}</button>
+          <button className="soft-button" onClick={() => props.openExplorer(modal.validator.address)}><ArrowUpRight size={15} />{t.openExplorer}</button>
+        </div>
+      </>
+    )
   }
   if (modal.type === "data") {
     title = t.dataHealth
@@ -56,8 +77,8 @@ export function DetailModal(props: {
     ) : <p>{t.noAccount}</p>
   }
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <div className="modal-card">
+    <div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={onClose}>
+      <div className="modal-card" onMouseDown={(event) => event.stopPropagation()}>
         <div className="panel-title"><h2>{title}</h2><button className="icon-button" onClick={onClose}><X size={16} /></button></div>
         <div className="modal-body">{content}</div>
       </div>

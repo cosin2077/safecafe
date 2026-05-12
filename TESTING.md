@@ -13,7 +13,7 @@ pnpm test:integration
 This builds the CLI and exercises the packaged `safecafe` command in mock mode. It verifies the semantic command set:
 
 - `status`
-- `operators`
+- `validators`
 - `stake`
 - `unstake`
 - `withdrawals`

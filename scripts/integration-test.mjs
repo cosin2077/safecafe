@@ -27,11 +27,11 @@ const workdir = mkdtempSync(join(tmpdir(), "safecafe-cli-"))
 try {
   runNoArgs()
   run(["status", "--mock"], ["Safecafe is ready", "SAFE balance"])
-  run(["operators", "--mock", "--active"], ["Safenet operators", "Core Contributors"])
+  run(["validators", "--mock", "--active"], ["Safenet validators", "Core Contributors"])
   run(["withdrawals", "--mock", "--account", account], ["Pending withdrawals", "Ready to claim"])
   run(["rewards", "--mock", "--account", account], ["Claimable rewards", "Proof status"])
   run(["contracts"], ["SAFE token", "Staking contract", "Rewards contract"])
-  run(["guide"], ["safecafe operators", "safecafe stake", "safecafe rewards"])
+  run(["guide"], ["safecafe validators", "safecafe stake", "safecafe rewards"])
 
   run(["stake", "--mock", "--validator", validator, "--amount", "100", "--dry-run"], ["Plan: Stake 100 SAFE", "Stake SAFE to validator"])
   run(["unstake", "--mock", "--validator", validator, "--amount", "25", "--dry-run"], ["Plan: Unstake 25 SAFE", "Initiate withdrawal from validator"])

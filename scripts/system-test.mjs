@@ -50,11 +50,11 @@ try {
   await waitForServer(preview)
   await expectRoute("/", "Safecafe")
   await expectRoute("/stake", "Safecafe")
-  await expectRoute("/operators", "Safecafe")
+  await expectRoute("/validators", "Safecafe")
   await expectRoute("/rewards", "Safecafe")
 
   const help = execFileSync(process.execPath, ["cli/dist/index.js", "--help"], { encoding: "utf8" })
-  for (const command of ["operators", "stake", "unstake", "withdrawals", "rewards", "claim-withdrawal", "claim-rewards"]) {
+  for (const command of ["validators", "stake", "unstake", "withdrawals", "rewards", "claim-withdrawal", "claim-rewards"]) {
     if (!help.includes(command)) throw new Error(`Expected CLI help to expose ${command}`)
   }
 } finally {

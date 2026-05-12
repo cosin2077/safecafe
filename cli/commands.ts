@@ -77,8 +77,8 @@ export function registerCommands(program: Command) {
   })
 
 program
-  .command("operators")
-  .description("List Safenet staking operators")
+  .command("validators")
+  .description("List Safenet staking validators")
   .option("--active", "Only show active validators")
   .option("--sort <field>", "Sort by name, participation, commission, or stake", "participation")
   .action(async (options: { active?: boolean; sort: string }) => {
@@ -94,7 +94,7 @@ program
       })
 
     output(globals, filtered, () => {
-      console.log("Safenet operators")
+      console.log("Safenet validators")
       for (const validator of filtered) {
         console.log(
           `${validator.label.padEnd(22)} ${validator.status.padEnd(8)} participation ${validator.participationRate
@@ -284,7 +284,7 @@ program
     console.log("   safecafe status --account 0xYourSafe")
     console.log("")
     console.log("2. Pick a validator")
-    console.log("   safecafe operators --active --sort participation")
+    console.log("   safecafe validators --active --sort participation")
     console.log("")
     console.log("3. Prepare a stake")
     console.log('   safecafe stake --account 0xYourSafe --validator "Core Contributors" --amount 100 --dry-run')
