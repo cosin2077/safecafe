@@ -49,7 +49,7 @@ importers:
         specifier: 8.5.1
         version: 8.5.1(postcss@8.5.14)(tsx@4.21.0)(typescript@5.9.3)
       wrangler:
-        specifier: latest
+        specifier: 4.90.0
         version: 4.90.0
 
 packages:
