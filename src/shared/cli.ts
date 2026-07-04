@@ -3,7 +3,6 @@ import { stdin as input, stdout as outputStream } from "node:process"
 import { createInterface } from "node:readline/promises"
 import { createWalletClient, type Hex, http } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
-import { mainnet } from "viem/chains"
 import {
   compactAddress,
   createSafenetPublicClient,
@@ -11,6 +10,7 @@ import {
   type TxPlan,
   toSafeTransactionPayload,
 } from "../protocol"
+import { ethereumMainnet } from "../protocol/chains"
 import { bigintReplacer, resolveEnvValue, stringifyBigInts } from "./utils"
 
 export type CliGlobalOptions = {
@@ -129,7 +129,7 @@ export async function sendPlanTransactions(plan: TxPlan, options: SendPlanOption
   const rpcUrl = options.rpcUrl || DEFAULT_RPC_URLS[0]
   const walletClient = createWalletClient({
     account,
-    chain: mainnet,
+    chain: ethereumMainnet,
     transport: http(rpcUrl),
   })
   const publicClient = createSafenetPublicClient(rpcUrl)

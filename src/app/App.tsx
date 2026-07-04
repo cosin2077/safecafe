@@ -18,7 +18,6 @@ import {
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { type Address, createWalletClient, custom } from "viem"
-import { mainnet } from "viem/chains"
 import {
   type AccountSnapshot,
   CHAIN_ID,
@@ -42,6 +41,7 @@ import {
   toSafeTransactionPayload,
   type ValidatorInfo,
 } from "../protocol"
+import { ethereumMainnet } from "../protocol/chains"
 import { createPathMap, navFromPath as resolveNavFromPath } from "../shared"
 import { SAFECAFE_VERSION } from "../shared/version"
 import { DetailModal } from "./DetailModal"
@@ -542,7 +542,7 @@ export function App() {
       if (txPlan.simulation.status === "failed") throw new Error(txPlan.simulation.message)
       const client = createWalletClient({
         account,
-        chain: mainnet,
+        chain: ethereumMainnet,
         transport: custom(window.ethereum),
       })
       const publicClient = createSafenetPublicClient(import.meta.env.VITE_RPC_URL)

@@ -19,6 +19,7 @@
     "cloudflare:deploy": "pnpm build:web && wrangler pages deploy dist --project-name safecafe",
     "ipfs:publish": "node scripts/publish-ipfs.mjs",
     "ipfs:publish:dist": "node scripts/publish-ipfs.mjs --skip-build",
+    "ipfs:size": "node scripts/publish-ipfs.mjs --skip-build --size-check",
     "ipfs:sync-records": "node scripts/publish-ipfs.mjs --sync-records",
     "cli": "node scripts/run-cli.mjs",
     "cli:packed": "node scripts/run-cli.mjs --command node --entry cli/dist/index.js",

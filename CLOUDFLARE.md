@@ -48,6 +48,7 @@ FILEBASE_ACCESS_TOKEN=...
 FILEBASE_SECRET_KEY=...
 FILEBASE_BUCKET=safecafe
 FILEBASE_RELEASE_KEY_PREFIX=releases
+FILEBASE_IPFS_MAX_BYTES=1500000
 ```
 
 The Filebase SDK uses the Filebase S3 endpoint by default.
@@ -58,6 +59,8 @@ Publish a verified web build to Filebase:
 pnpm check
 pnpm test:integration
 pnpm test:system
+pnpm build:web
+pnpm ipfs:size
 pnpm ipfs:publish
 ```
 
@@ -82,6 +85,17 @@ https://safe-staking.eth.limo
 ```
 
 Every content change creates a new CID. Keep old release CIDs pinned in Filebase if you want historical builds to remain retrievable.
+
+The IPFS payload is intentionally lean:
+
+- `index.html`, `manifest.json`, and other entry files use short caching so ENS contenthash updates are visible quickly.
+- Vite fingerprinted files under `/assets/*` are immutable and can be cached for one year.
+- `release-manifest.json` is immutable because it is inside a content-addressed CID.
+- Large social-preview source images are excluded from the IPFS payload by default; publish with `--include-heavy-assets --allow-large` only when you explicitly want the larger archive.
+- `FILEBASE_IPFS_MAX_BYTES` fails the publish if the final upload payload grows past the budget.
+- `pnpm ipfs:size` prints the payload size and largest files without uploading or updating release records.
+
+Do not treat Filebase's public IPFS gateway as the primary traffic endpoint. Filebase IPFS bandwidth is account-limited and can be exhausted by abusive traffic. Use Cloudflare Pages as the normal public mirror, use `safe-staking.eth.limo` as the ENS/IPFS fallback, and keep the raw Filebase gateway URL mainly for verification and release records. If Filebase gateway bandwidth is exhausted, the pinned CID can still be fetched through other IPFS gateways or native IPFS nodes as long as the content remains available on the IPFS network.
 
 After a successful upload, the script also updates release records in git:
 

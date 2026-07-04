@@ -8,7 +8,7 @@ export default defineConfig({
       output: {
         manualChunks: {
           react: ["react", "react-dom"],
-          viem: ["viem", "viem/chains"],
+          viem: ["viem"],
           icons: ["lucide-react"],
         },
       },

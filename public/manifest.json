@@ -13,12 +13,6 @@
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"
-    },
-    {
-      "src": "/safecafe.png",
-      "sizes": "1672x941",
-      "type": "image/png",
-      "purpose": "any"
     }
   ]
 }

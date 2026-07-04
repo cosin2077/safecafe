@@ -11,6 +11,7 @@ const cloudflareDocPath = join(process.cwd(), "CLOUDFLARE.md")
 const readmePath = join(process.cwd(), "README.md")
 const releaseRecordsDir = join(process.cwd(), "releases", "ipfs")
 const managedReleaseFiles = new Set(["release-manifest.json", "release-record.json"])
+const defaultExcludedDistFiles = new Set(["safecafe.png"])
 const env = loadEnv()
 const args = new Set(process.argv.slice(2))
 
@@ -21,13 +22,6 @@ if (args.has("--sync-records") || args.has("--sync-records-from-dist")) {
   process.exit(0)
 }
 
-const config = {
-  accessToken: requiredEnv("FILEBASE_ACCESS_TOKEN"),
-  secretKey: requiredEnv("FILEBASE_SECRET_KEY"),
-  bucket: env.FILEBASE_BUCKET || "safecafe",
-  releaseKeyPrefix: env.FILEBASE_RELEASE_KEY_PREFIX || "releases",
-}
-
 if (!args.has("--skip-build")) {
   run("pnpm", ["build:web"])
 }
@@ -36,11 +30,12 @@ if (!existsSync(distDir)) {
   throw new Error("dist/ does not exist. Run pnpm build:web first or omit --skip-build.")
 }
 
-const buildFiles = (await listFiles(distDir)).filter((file) => !managedReleaseFiles.has(file.key))
+const buildFiles = (await listFiles(distDir)).filter(isPublishableFile)
 if (!buildFiles.some((file) => file.key === "index.html")) {
   throw new Error("dist/index.html is missing. Refusing to publish an incomplete web build.")
 }
 
+const excludedDistFiles = [...defaultExcludedDistFiles].filter((key) => existsSync(join(distDir, key)))
 const baseManifest = createManifest(buildFiles)
 const releaseManifestPath = join(distDir, "release-manifest.json")
 writeFileSync(releaseManifestPath, JSON.stringify(baseManifest, null, 2))
@@ -53,6 +48,37 @@ const filesWithManifest = [
     size: statSync(releaseManifestPath).size,
   },
 ].sort((a, b) => a.key.localeCompare(b.key))
+const publishBudgetBytes = Number(env.FILEBASE_IPFS_MAX_BYTES || 1_500_000)
+const publishSizeBytes = totalSize(filesWithManifest)
+if (publishSizeBytes > publishBudgetBytes && !args.has("--allow-large")) {
+  throw new Error(
+    `IPFS publish payload is ${formatBytes(publishSizeBytes)}, above budget ${formatBytes(
+      publishBudgetBytes,
+    )}. Optimize assets or rerun with --allow-large.`,
+  )
+}
+
+if (args.has("--dry-run") || args.has("--size-check")) {
+  console.log("IPFS publish dry run")
+  console.log(`Payload size: ${formatBytes(publishSizeBytes)}`)
+  console.log(`Budget:       ${formatBytes(publishBudgetBytes)}`)
+  console.log("")
+  console.log("Largest files:")
+  for (const file of [...filesWithManifest].sort((a, b) => b.size - a.size).slice(0, 12)) {
+    console.log(`${formatBytes(file.size).padStart(10)}  ${file.key}`)
+  }
+  console.log("")
+  console.log("No files were uploaded and release docs were not updated.")
+  process.exit(0)
+}
+
+const config = {
+  accessToken: requiredEnv("FILEBASE_ACCESS_TOKEN"),
+  secretKey: requiredEnv("FILEBASE_SECRET_KEY"),
+  bucket: env.FILEBASE_BUCKET || "safecafe",
+  releaseKeyPrefix: env.FILEBASE_RELEASE_KEY_PREFIX || "releases",
+}
+
 const objectManager = new ObjectManager(config.accessToken, config.secretKey, {
   bucket: config.bucket,
   maxConcurrentUploads: Number(env.FILEBASE_UPLOAD_CONCURRENCY || 6),
@@ -60,6 +86,7 @@ const objectManager = new ObjectManager(config.accessToken, config.secretKey, {
 
 const releaseKey = `${config.releaseKeyPrefix}/${baseManifest.name}-${baseManifest.version}-${Date.now()}.car`
 console.log(`Publishing ${filesWithManifest.length} files from dist/ as an IPFS directory CAR`)
+console.log(`Payload size:     ${formatBytes(publishSizeBytes)}`)
 console.log(`Filebase bucket: ${config.bucket}`)
 console.log(`Release object:  ${releaseKey}`)
 const source = filesWithManifest.map((file) => ({
@@ -108,8 +135,9 @@ console.log("")
 console.log("IPFS publish complete")
 console.log(`CID:        ${cid}`)
 console.log(`URI:        ipfs://${cid}`)
-console.log(`Filebase:   https://ipfs.filebase.io/ipfs/${cid}/`)
+console.log(`ENS/IPFS:   https://safe-staking.eth.limo/`)
 console.log(`dweb.link:  https://${cid}.ipfs.dweb.link/`)
+console.log(`Filebase:   https://ipfs.filebase.io/ipfs/${cid}/ (verification, not primary traffic)`)
 console.log("")
 console.log("Next ENS step:")
 console.log(`Set safe-staking.eth contenthash to ipfs://${cid}`)
@@ -192,6 +220,9 @@ function createManifest(files) {
     build: {
       command: "pnpm build:web",
       packageManager: packageJson.packageManager,
+      publishedBytes: totalSize(files),
+      maxBytes: Number(env.FILEBASE_IPFS_MAX_BYTES || 1_500_000),
+      excludedFiles: excludedDistFiles,
     },
     contracts: {
       safeToken: "0x5aFE3855358E112B5647B952709E6165e1c1eEEe",
@@ -208,6 +239,22 @@ function createManifest(files) {
 
 function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex")
+}
+
+function isPublishableFile(file) {
+  if (managedReleaseFiles.has(file.key)) return false
+  if (defaultExcludedDistFiles.has(file.key) && !args.has("--include-heavy-assets")) return false
+  return true
+}
+
+function totalSize(files) {
+  return files.reduce((sum, file) => sum + file.size, 0)
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
+  return `${(bytes / 1024 / 1024).toFixed(2)} MiB`
 }
 
 function git(args) {
