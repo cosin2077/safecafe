@@ -28,6 +28,7 @@ import {
   fetchSafeUsdPrice,
   fetchValidators,
   findValidator,
+  isTxPlanForAccount,
   planClaimRewards,
   planClaimWithdrawal,
   planStake,
@@ -35,7 +36,6 @@ import {
   readAccountSnapshot,
   readHealth,
   readValidatorPositions,
-  readValidatorTotals,
   SAFE_PRICE_CACHE_MS,
   type TxPlan,
   toSafeTransactionPayload,
@@ -44,6 +44,7 @@ import {
 import { ethereumMainnet } from "../protocol/chains"
 import { createPathMap, navFromPath as resolveNavFromPath } from "../shared"
 import { SAFECAFE_VERSION } from "../shared/version"
+import { AgentLauncher } from "./AgentLauncher"
 import { DetailModal } from "./DetailModal"
 import {
   priceStatusLabel,
@@ -190,6 +191,19 @@ export function App() {
   const displaySummary = hasLiveAccountData ? summary : emptySummary
   const displayValidators = visibleValidators
   const displaySafePriceUsd = safePrice.usd
+  const agentContext = useMemo(
+    () => ({
+      account,
+      chainId,
+      liveBlock,
+      liveSnapshot,
+      summary,
+      validators,
+      rewardProof,
+      liveMerkleRoot,
+    }),
+    [account, chainId, liveBlock, liveMerkleRoot, liveSnapshot, rewardProof, summary, validators],
+  )
 
   const toast = useCallback((message: string, tone: Toast["tone"] = "info", title?: string) => {
     const id = Date.now() + Math.random()
@@ -257,18 +271,10 @@ export function App() {
     setIsLoadingValidators(true)
     setValidatorLoadError("")
     fetchValidators(undefined, { fallback: false })
-      .then(async (items) => {
-        const client = createSafenetPublicClient(import.meta.env.VITE_RPC_URL)
+      .then((items) => {
         setValidatorStakeError("")
-        const validatorsWithTotals = await readValidatorTotals(client, items).catch((error) => {
-          setValidatorStakeError(error instanceof Error ? error.message : t.validatorStakeUnavailable)
-          return items
-        })
-        setValidators(validatorsWithTotals)
-        setValidator(
-          (current) =>
-            findValidator(validatorsWithTotals, current)?.address ?? validatorsWithTotals[0]?.address ?? current,
-        )
+        setValidators(items)
+        setValidator((current) => findValidator(items, current)?.address ?? items[0]?.address ?? current)
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : t.validatorInfoFailed
@@ -278,7 +284,7 @@ export function App() {
       .finally(() => {
         setIsLoadingValidators(false)
       })
-  }, [t.validatorInfoFailed, t.validatorStakeUnavailable, toast])
+  }, [t.validatorInfoFailed, toast])
 
   const refreshLiveReads = useCallback(
     async (target = account) => {
@@ -492,7 +498,7 @@ export function App() {
   async function simulateTxPlan(plan: TxPlan): Promise<TxPlan> {
     if (!account) return plan
     const client = createSafenetPublicClient(import.meta.env.VITE_RPC_URL)
-    const txsToSimulate = plan.action === "stake" && plan.txs.length > 1 ? plan.txs.slice(0, 1) : plan.txs
+    const txsToSimulate = usesApprovalBeforeStake(plan) ? plan.txs.slice(0, 1) : plan.txs
     try {
       for (const tx of txsToSimulate) {
         await client.call({
@@ -522,8 +528,17 @@ export function App() {
     }
   }
 
-  async function submitPlan() {
-    if (!txPlan) return
+  function usesApprovalBeforeStake(plan: TxPlan) {
+    return (
+      plan.txs.length > 1 &&
+      plan.txs[0]?.label === "Approve SAFE for staking contract" &&
+      plan.txs.some((tx) => tx.label === "Stake SAFE to validator")
+    )
+  }
+
+  async function submitPlan(planOverride?: TxPlan) {
+    const planToSubmit = planOverride ?? txPlan
+    if (!planToSubmit) return
     if (!window.ethereum) {
       toast(t.noWallet, "warning")
       return
@@ -536,17 +551,18 @@ export function App() {
     setTxProgress("")
     try {
       await ensureMainnet()
-      const validation = validateAction(txPlan.action)
+      if (!isTxPlanForAccount(planToSubmit, account)) throw new Error(t.agentAccountChanged)
+      const validation = planToSubmit.action === "agent-plan" ? null : validateAction(planToSubmit.action)
       if (validation) throw new Error(validation)
-      if (!txPlan.simulation) throw new Error(t.connectToPlan)
-      if (txPlan.simulation.status === "failed") throw new Error(txPlan.simulation.message)
+      if (!planToSubmit.simulation) throw new Error(t.connectToPlan)
+      if (planToSubmit.simulation.status === "failed") throw new Error(planToSubmit.simulation.message)
       const client = createWalletClient({
         account,
         chain: ethereumMainnet,
         transport: custom(window.ethereum),
       })
       const publicClient = createSafenetPublicClient(import.meta.env.VITE_RPC_URL)
-      for (const tx of txPlan.txs) {
+      for (const tx of planToSubmit.txs) {
         setTxProgress(`${t.simulationStatus}: ${translateTxLabel(tx.label, t)}`)
         try {
           await publicClient.call({
@@ -605,12 +621,17 @@ export function App() {
     }
   }
 
-  function exportSafePayload() {
-    if (!txPlan) {
+  function exportSafePayload(planOverride?: TxPlan) {
+    const planToExport = planOverride ?? txPlan
+    if (!planToExport) {
       toast(t.connectToPlan, "warning")
       return
     }
-    const payload = toSafeTransactionPayload(txPlan, CHAIN_ID, {
+    if (account && !isTxPlanForAccount(planToExport, account)) {
+      toast(t.agentAccountChanged, "warning")
+      return
+    }
+    const payload = toSafeTransactionPayload(planToExport, CHAIN_ID, {
       description: "Generated by Safecafe. Review all transactions before signing.",
     })
     const url = URL.createObjectURL(
@@ -800,7 +821,7 @@ export function App() {
             showOnlyActive={showOnlyActive}
             submitPlan={submitPlan}
             txProgress={txProgress}
-            txPlan={txPlan?.action === action ? txPlan : null}
+            txPlan={txPlan && (txPlan.action === action || txPlan.action === "agent-plan") ? txPlan : null}
             validator={validator}
             visibleValidators={dashboardValidators}
             validators={dashboardValidators}
@@ -866,7 +887,7 @@ export function App() {
             summary={displaySummary}
             dataStatus={dataStatus}
             submitPlan={submitPlan}
-            txPlan={txPlan?.action === "claim-rewards" ? txPlan : null}
+            txPlan={txPlan && (txPlan.action === "claim-rewards" || txPlan.action === "agent-plan") ? txPlan : null}
             txProgress={txProgress}
           />
         )}
@@ -881,7 +902,7 @@ export function App() {
             selectedValidator={selectedValidator}
             summary={displaySummary}
             submitPlan={submitPlan}
-            txPlan={txPlan?.action === "claim-withdrawal" ? txPlan : null}
+            txPlan={txPlan && (txPlan.action === "claim-withdrawal" || txPlan.action === "agent-plan") ? txPlan : null}
             txProgress={txProgress}
           />
         )}
@@ -921,6 +942,19 @@ export function App() {
           />
         ))}
       </div>
+      <AgentLauncher
+        t={t}
+        context={agentContext}
+        isSubmitting={isSubmitting}
+        onConnectWallet={connectWallet}
+        onSimulatePlan={simulateTxPlan}
+        onExportPlan={exportSafePayload}
+        onSubmitPlan={submitPlan}
+        onApplyPlan={(plan) => {
+          setTxPlan(plan)
+          toast(t.planReady, "success")
+        }}
+      />
     </div>
   )
 }

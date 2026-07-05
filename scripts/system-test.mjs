@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process"
+import { readdirSync, readFileSync } from "node:fs"
 import { createServer } from "node:net"
 
 const previewPort = await getAvailablePort()
@@ -51,6 +52,12 @@ async function expectRoute(path, expectedText) {
   if (!html.includes(expectedText)) throw new Error(`Expected ${path} HTML to contain ${expectedText}`)
 }
 
+function expectBuiltAssetText(expectedText) {
+  const assetNames = readdirSync("dist/assets").filter((name) => name.endsWith(".js"))
+  const found = assetNames.some((name) => readFileSync(`dist/assets/${name}`, "utf8").includes(expectedText))
+  if (!found) throw new Error(`Expected built JS assets to contain ${expectedText}`)
+}
+
 const preview = spawn("pnpm", ["preview", "--host", "127.0.0.1", "--port", String(previewPort)], {
   stdio: ["ignore", "pipe", "pipe"],
 })
@@ -70,6 +77,7 @@ try {
   await expectRoute("/withdrawals", "Safecafe")
   await expectRoute("/validators", "Safecafe")
   await expectRoute("/rewards", "Safecafe")
+  expectBuiltAssetText("Open Staking Agent")
 
   const help = execFileSync(process.execPath, ["cli/dist/index.js", "--help"], { encoding: "utf8" })
   for (const command of [

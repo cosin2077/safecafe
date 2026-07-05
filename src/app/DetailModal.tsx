@@ -1,5 +1,5 @@
 import { ArrowUpRight, Copy, X } from "lucide-react"
-import { type ReactNode, useEffect } from "react"
+import { type ReactNode, useEffect, useRef } from "react"
 import type { Address } from "viem"
 import { CHAIN_ID, compactAddress, formatSafe } from "../protocol"
 import { merkleLabel } from "./formatters"
@@ -18,13 +18,21 @@ export function DetailModal(props: {
   t: MessageBundle
 }) {
   const { account, dataStatus, modal, onClose, t } = props
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose()
+      if (event.key === "Tab") trapFocus(event, dialogRef.current)
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [onClose])
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => closeButtonRef.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [])
 
   let title = t.viewReadiness
   let content: ReactNode = <p>{t.readinessDescription}</p>
@@ -136,6 +144,7 @@ export function DetailModal(props: {
   }
   return (
     <div
+      ref={dialogRef}
       className="modal-backdrop"
       role="dialog"
       aria-modal="true"
@@ -146,7 +155,14 @@ export function DetailModal(props: {
       <div className="modal-card">
         <div className="panel-title">
           <h2>{title}</h2>
-          <button type="button" className="icon-button" onClick={onClose}>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            className="icon-button"
+            onClick={onClose}
+            aria-label={t.closeNotification}
+            title={t.closeNotification}
+          >
             <X size={16} />
           </button>
         </div>
@@ -154,4 +170,25 @@ export function DetailModal(props: {
       </div>
     </div>
   )
+}
+
+function trapFocus(event: KeyboardEvent, dialog: HTMLElement | null) {
+  if (!dialog) return
+  const focusable = Array.from(
+    dialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.offsetParent !== null)
+  if (!focusable.length) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+    return
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
 }

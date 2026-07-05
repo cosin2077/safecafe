@@ -1,4 +1,4 @@
-import { type Address, encodeFunctionData, type Hex, parseUnits } from "viem"
+import { type Address, encodeFunctionData, getAddress, type Hex, parseUnits } from "viem"
 import { erc20Abi, merkleDropAbi, stakingAbi } from "./abi"
 import { CONTRACTS } from "./contracts"
 
@@ -9,7 +9,7 @@ export type PlannedTx = {
   value: bigint
 }
 
-export type TxPlanAction = "stake" | "unstake" | "claim-withdrawal" | "claim-rewards"
+export type TxPlanAction = "stake" | "unstake" | "claim-withdrawal" | "claim-rewards" | "agent-plan"
 
 export type TxSimulation = {
   status: "passed" | "partial" | "failed"
@@ -146,4 +146,23 @@ export function planClaimRewards(params: {
     ],
     warnings: [],
   }
+}
+
+export function combineTxPlans(params: {
+  title: string
+  account?: Address
+  plans: TxPlan[]
+  warnings?: string[]
+}): TxPlan {
+  return {
+    action: "agent-plan",
+    title: params.title,
+    account: params.account,
+    txs: params.plans.flatMap((plan) => plan.txs),
+    warnings: [...params.plans.flatMap((plan) => plan.warnings), ...(params.warnings ?? [])],
+  }
+}
+
+export function isTxPlanForAccount(plan: Pick<TxPlan, "account">, account: Address): boolean {
+  return !plan.account || getAddress(plan.account) === getAddress(account)
 }

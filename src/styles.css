@@ -960,7 +960,7 @@ select:focus-visible {
 .validators-panel {
   grid-column: 1 / -1;
   padding: 0;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .validators-panel .panel-title {
@@ -1094,7 +1094,6 @@ select:focus-visible {
 .validator-row:hover {
   background: #f8fcfb;
   box-shadow: inset 3px 0 0 var(--teal);
-  transform: translateX(2px);
 }
 
 .validator-row:last-child {
@@ -1303,8 +1302,13 @@ select:focus-visible {
 }
 
 .key-row {
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) auto;
   align-items: center;
+}
+
+.key-row > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .info-card span {
@@ -1354,7 +1358,7 @@ select:focus-visible {
 }
 
 .modal-card {
-  width: min(560px, 100%);
+  width: min(560px, calc(100vw - 32px));
   max-height: min(720px, calc(100vh - 40px));
   overflow: auto;
   border: 1px solid var(--line);
@@ -1439,7 +1443,7 @@ select:focus-visible {
 .toast-stack {
   position: fixed;
   right: 24px;
-  bottom: 24px;
+  top: 24px;
   z-index: 80;
   display: grid;
   gap: 10px;
@@ -1551,6 +1555,290 @@ select:focus-visible {
 
 .footer {
   display: none;
+}
+
+.agent-launcher {
+  position: fixed;
+  z-index: 170;
+  display: inline-grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  border: 1px solid rgba(0, 136, 121, 0.28);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff 0%, #edf8f5 100%);
+  color: var(--teal-dark);
+  box-shadow: 0 18px 44px rgba(0, 111, 101, 0.2);
+  cursor: grab;
+  touch-action: none;
+}
+
+.agent-launcher:active {
+  cursor: grabbing;
+}
+
+.agent-launcher.open {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.agent-launcher-dot {
+  position: absolute;
+  right: 12px;
+  bottom: 11px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: var(--green);
+}
+
+.agent-dialog {
+  position: fixed;
+  right: 24px;
+  bottom: 92px;
+  z-index: 180;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(640px, calc(100vh - 96px));
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 24px 80px rgba(16, 24, 40, 0.24);
+}
+
+.agent-dialog::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: rgba(16, 20, 35, 0.18);
+}
+
+.agent-dialog-header,
+.agent-dialog-footer {
+  padding: 12px;
+  background: var(--surface);
+}
+
+.agent-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+}
+
+.agent-dialog-header div {
+  display: grid;
+  gap: 2px;
+}
+
+.agent-dialog-header strong {
+  font-size: 15px;
+}
+
+.agent-dialog-header span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agent-icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.agent-message-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  overflow: auto;
+  padding: 12px;
+  background: var(--surface-soft);
+}
+
+.agent-message {
+  max-width: 88%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-message.assistant {
+  border: 1px solid var(--line);
+  background: #ffffff;
+}
+
+.agent-message.user {
+  justify-self: end;
+  background: var(--ink);
+  color: #ffffff;
+}
+
+.agent-message-end {
+  width: 1px;
+  height: 1px;
+}
+
+.agent-connect-button,
+.agent-send-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--teal);
+  color: white;
+  font-weight: 800;
+}
+
+.agent-plan-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.agent-plan-card.stale {
+  opacity: 0.72;
+}
+
+.agent-plan-title,
+.agent-review-reminder {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.agent-plan-title svg {
+  color: var(--teal);
+}
+
+.agent-plan-title span {
+  display: grid;
+  gap: 2px;
+}
+
+.agent-plan-title small,
+.agent-phase small,
+.agent-review-reminder {
+  color: var(--muted);
+}
+
+.agent-risk-list,
+.agent-phase-list,
+.agent-tx-list {
+  display: grid;
+  gap: 7px;
+}
+
+.agent-risk {
+  margin: 0;
+  font-size: 13px;
+}
+
+.agent-risk.blocked {
+  color: var(--red);
+}
+
+.agent-risk.warning {
+  color: var(--amber);
+}
+
+.agent-phase {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.agent-tx-list span {
+  padding-left: 10px;
+  border-left: 2px solid var(--teal);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.agent-warning-ack {
+  display: flex;
+  gap: 9px;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.agent-plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-plan-actions .primary-button,
+.agent-plan-actions .soft-button {
+  min-height: 38px;
+  font-size: 13px;
+}
+
+.agent-dialog-footer {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.agent-prompt-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-prompt-chip-row button {
+  min-height: 44px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.agent-composer {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-composer span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.agent-composer textarea {
+  width: 100%;
+  resize: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: #ffffff;
+  color: var(--ink);
+  font: inherit;
 }
 
 @media (max-width: 1180px) {
@@ -1777,11 +2065,44 @@ select:focus-visible {
 
   .toast-stack {
     right: 16px;
-    bottom: 16px;
+    top: 88px;
+    bottom: auto;
   }
 
   .donut {
     width: 220px;
     height: 220px;
+  }
+
+  .agent-launcher {
+    right: max(16px, env(safe-area-inset-right));
+    bottom: max(16px, env(safe-area-inset-bottom));
+  }
+
+  .agent-dialog {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    max-height: 78vh;
+    border-radius: 16px 16px 0 0;
+    background: var(--surface);
+    box-shadow: 0 -18px 60px rgba(16, 24, 40, 0.22);
+  }
+
+  .agent-dialog-footer {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .agent-prompt-chip-row {
+    flex-wrap: wrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .agent-prompt-chip-row button {
+    flex: 1 1 calc(50% - 8px);
+    min-height: 44px;
   }
 }

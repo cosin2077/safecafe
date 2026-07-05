@@ -6,7 +6,16 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!dist", "!cli/dist", "!cli/dist-bin", "!node_modules", "!.wrangler", "!tsconfig.tsbuildinfo"]
+    "includes": [
+      "**",
+      "!dist",
+      "!cli/dist",
+      "!cli/dist-bin",
+      "!node_modules",
+      "!.wrangler",
+      "!output",
+      "!tsconfig.tsbuildinfo"
+    ]
   },
   "formatter": {
     "enabled": true,

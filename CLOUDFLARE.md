@@ -13,7 +13,14 @@ Create a Cloudflare Pages project connected to the GitHub repository:
 - Build output directory: `dist`
 - Node version: `22`
 
-No Cloudflare secrets are required for normal builds. Add `VITE_RPC_URL` only if you want the deployed web app to use a specific RPC endpoint instead of the bundled public fallback endpoints.
+Configure these environment variables before enabling the Staking Agent:
+
+- `VITE_RPC_URL` (optional): browser-safe Ethereum RPC endpoint for live wallet reads. If omitted, the app uses bundled public fallback RPC endpoints.
+- `SAFECAFE_LLM_API_BASE`: OpenAI-compatible chat completions base URL, kept server-side.
+- `SAFECAFE_LLM_API_MODEL`: model name for the Staking Agent.
+- `SAFECAFE_LLM_API_KEY`: server-side API key for the Agent proxy.
+
+`SAFECAFE_LLM_API_KEY` must not be exposed as a `VITE_*` variable. The web app calls the Cloudflare Pages Function at `/api/agent`; the function reads the server-side `SAFECAFE_LLM_*` variables and returns only the Agent response.
 
 ## Direct Upload
 

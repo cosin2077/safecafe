@@ -40,3 +40,4 @@ coverage/
 proposal*
 draft
 .wrangler/
+output
