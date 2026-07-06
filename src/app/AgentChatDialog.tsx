@@ -58,6 +58,7 @@ export type AgentChatDialogProps = {
   anchor: { x: number; y: number } | null
   context: AgentContext
   isSubmitting: boolean
+  rpcAuthToken: string | null
   onApplyPlan: (plan: TxPlan) => void
   onClose: () => void
   onConnectWallet: () => Promise<void>
@@ -82,7 +83,7 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
   const messageEndRef = useRef<HTMLDivElement>(null)
 
   const activeSession = sessions.find((session) => session.id === activeSessionId) ?? sessions[0]
-  const currentContextKey = `${props.context.account ?? ""}:${props.context.chainId ?? ""}:${props.context.liveBlock ?? ""}:${agentAccessKey(props.context)}`
+  const currentContextKey = `${props.context.account ?? ""}:${props.context.subjectAccount ?? ""}:${props.context.chainId ?? ""}:${props.context.liveBlock ?? ""}:${agentAccessKey(props.context)}`
   const isStale = Boolean(activeSession.draft && activeSession.draftKey && activeSession.draftKey !== currentContextKey)
   const blocked = activeSession.draft?.risks.some((risk) => risk.severity === "blocked") ?? false
   const warnings = useMemo(
@@ -231,7 +232,11 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
       }))
       return
     }
-    if (!props.context.account || !props.context.liveSnapshot) {
+    if (
+      !props.context.account ||
+      !(props.context.subjectAccount ?? props.context.account) ||
+      !props.context.liveSnapshot
+    ) {
       updateActiveSession((session) => ({
         ...session,
         messages: [
@@ -310,6 +315,7 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
     try {
       await requestAgentReplyStream(
         {
+          authToken: props.rpcAuthToken,
           message,
           messages: history,
           context: toAgentChatContext(props.context),
@@ -447,7 +453,13 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
           <AgentLogo />
           <span>
             <strong>{props.t.agentTitle}</strong>
-            <small>{props.context.account ? compactAddress(props.context.account) : props.t.notConnected}</small>
+            <small>
+              {props.context.subjectAccount
+                ? compactAddress(props.context.subjectAccount)
+                : props.context.account
+                  ? compactAddress(props.context.account)
+                  : props.t.notConnected}
+            </small>
           </span>
         </div>
         <div className="agent-header-actions">
@@ -838,7 +850,7 @@ function shouldStartNewIntent(input: string) {
 }
 
 function agentAccessKey(context: AgentContext) {
-  if (!context.account || !context.liveSnapshot) return "locked"
+  if (!context.account || !(context.subjectAccount ?? context.account) || !context.liveSnapshot) return "locked"
   return context.summary.safeBalance > 0n || context.summary.totalStaked > 0n ? "eligible" : "empty"
 }
 

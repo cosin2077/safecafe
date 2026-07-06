@@ -43,6 +43,8 @@ export type AgentPlan = {
   instruction: string
   intent: AgentIntent
   account: Address | null
+  signerAccount?: Address | null
+  subjectKind?: "self" | "safe"
   createdAtBlock: bigint | null
   phases: AgentPlanPhase[]
   risks: AgentRisk[]
@@ -50,6 +52,8 @@ export type AgentPlan = {
 
 export type AgentContext = {
   account: Address | null
+  subjectAccount?: Address | null
+  subjectKind?: "self" | "safe"
   chainId: number | null
   liveBlock: bigint | null
   liveSnapshot: AccountSnapshot | null

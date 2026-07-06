@@ -1,7 +1,13 @@
+import type { IncomingMessage, ServerResponse } from "node:http"
 import react from "@vitejs/plugin-react"
 import { config as loadEnv } from "dotenv"
 import { defineConfig } from "vite"
 import { handleAgentApiRequest } from "./src/server/agentApi"
+import {
+  handleEthereumRpcGatewayRequest,
+  handleRpcChallengeRequest,
+  handleRpcVerifyRequest,
+} from "./src/server/rpcGateway"
 
 loadEnv()
 
@@ -11,20 +17,20 @@ export default defineConfig({
     {
       name: "safecafe-agent-api",
       configureServer(server) {
-        server.middlewares.use("/api/agent", async (req, res) => {
+        const handleApi = async (
+          req: IncomingMessage,
+          res: ServerResponse,
+          path: string,
+          handler: (request: Request) => Promise<Response>,
+        ) => {
           const chunks: Buffer[] = []
           for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-          const request = new Request("http://localhost/api/agent", {
+          const request = new Request(`http://localhost${path}`, {
             method: req.method,
             headers: req.headers as HeadersInit,
             body: req.method === "GET" || req.method === "HEAD" ? undefined : Buffer.concat(chunks),
           })
-          const response = await handleAgentApiRequest(request, {
-            SAFECAFE_RPC_URL: process.env.SAFECAFE_RPC_URL,
-            SAFECAFE_LLM_API_BASE: process.env.SAFECAFE_LLM_API_BASE,
-            SAFECAFE_LLM_API_MODEL: process.env.SAFECAFE_LLM_API_MODEL,
-            SAFECAFE_LLM_API_KEY: process.env.SAFECAFE_LLM_API_KEY,
-          })
+          const response = await handler(request)
           res.statusCode = response.status
           response.headers.forEach((value, key) => {
             res.setHeader(key, value)
@@ -40,6 +46,27 @@ export default defineConfig({
             return
           }
           res.end()
+        }
+        const env = {
+          SAFECAFE_RPC_ALLOW_ALL_WALLETS: process.env.SAFECAFE_RPC_ALLOW_ALL_WALLETS,
+          SAFECAFE_AUTH_SECRET: process.env.SAFECAFE_AUTH_SECRET,
+          SAFECAFE_RPC_URL: process.env.SAFECAFE_RPC_URL,
+          SAFECAFE_RPC_URLS: process.env.SAFECAFE_RPC_URLS,
+          SAFECAFE_LLM_API_BASE: process.env.SAFECAFE_LLM_API_BASE,
+          SAFECAFE_LLM_API_MODEL: process.env.SAFECAFE_LLM_API_MODEL,
+          SAFECAFE_LLM_API_KEY: process.env.SAFECAFE_LLM_API_KEY,
+        }
+        server.middlewares.use("/api/agent", async (req, res) => {
+          await handleApi(req, res, "/api/agent", (request) => handleAgentApiRequest(request, env))
+        })
+        server.middlewares.use("/api/auth/challenge", async (req, res) => {
+          await handleApi(req, res, "/api/auth/challenge", (request) => handleRpcChallengeRequest(request, env))
+        })
+        server.middlewares.use("/api/auth/verify", async (req, res) => {
+          await handleApi(req, res, "/api/auth/verify", (request) => handleRpcVerifyRequest(request, env))
+        })
+        server.middlewares.use("/api/rpc/ethereum", async (req, res) => {
+          await handleApi(req, res, "/api/rpc/ethereum", (request) => handleEthereumRpcGatewayRequest(request, env))
         })
       },
     },

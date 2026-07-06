@@ -7,7 +7,7 @@ export type AccountSnapshot = {
   safeBalance: bigint
   totalStaked: bigint
   pendingWithdrawals: readonly { amount: bigint; claimableAt: bigint }[]
-  nextClaimableWithdrawal: readonly [bigint, bigint]
+  nextClaimableWithdrawal: { amount: bigint; claimableAt: bigint }
   cumulativeClaimed: bigint
   withdrawDelay: bigint
   stakingAllowance: bigint
@@ -64,7 +64,7 @@ export async function readAccountSnapshot(client: PublicClient, account: Address
     safeBalance,
     totalStaked,
     pendingWithdrawals,
-    nextClaimableWithdrawal,
+    nextClaimableWithdrawalResult,
     cumulativeClaimed,
     withdrawDelay,
     stakingAllowance,
@@ -74,7 +74,10 @@ export async function readAccountSnapshot(client: PublicClient, account: Address
     safeBalance,
     totalStaked,
     pendingWithdrawals,
-    nextClaimableWithdrawal,
+    nextClaimableWithdrawal: {
+      amount: nextClaimableWithdrawalResult[0],
+      claimableAt: nextClaimableWithdrawalResult[1],
+    },
     cumulativeClaimed,
     withdrawDelay,
     stakingAllowance,

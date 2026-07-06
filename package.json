@@ -44,6 +44,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2",
+    "@cloudflare/workers-types": "^5.20260705.1",
     "@filebase/sdk": "1.0.6",
     "@playwright/test": "^1.61.1",
     "@types/node": "24.10.13",

@@ -1,11 +1,10 @@
-import { createPublicClient, getAddress, http, isAddress } from "viem"
-import { erc20Abi, stakingAbi } from "../protocol/abi"
-import { ethereumMainnet } from "../protocol/chains"
-import { CONTRACTS } from "../protocol/contracts"
+import { getAddress, isAddress } from "viem"
+import { verifySafeStakingSubjectAccess } from "./accessStrategy"
+import { readRpcSession } from "./authSession"
+import type { RpcGatewayEnv } from "./serverEnv"
 
-type AgentApiEnv = {
+type AgentApiEnv = RpcGatewayEnv & {
   SAFECAFE_AGENT_TEST_VERIFIED_ACCESS?: string
-  SAFECAFE_RPC_URL?: string
   SAFECAFE_LLM_API_BASE?: string
   SAFECAFE_LLM_API_MODEL?: string
   SAFECAFE_LLM_API_KEY?: string
@@ -24,6 +23,8 @@ type SanitizedRequest = {
   context: {
     account: string | null
     accountConnected: boolean
+    subjectAccount: string | null
+    subjectKind: "self" | "safe"
     chainId: unknown
     hasLiveSnapshot: boolean
     hasStakingPosition: boolean
@@ -46,7 +47,7 @@ export async function handleAgentApiRequest(request: Request, env: AgentApiEnv):
   const parsed = await readAgentRequest(request)
   if (parsed.status !== "ok") return json({ error: parsed.error }, parsed.status)
 
-  const access = await verifyAgentAccess(parsed.value, env)
+  const access = await verifyAgentAccess(request, parsed.value, env)
   const fallback = lockedOrFallbackReply(access)
   if (fallback) return agentResponse(parsed.value, fallback.content, fallback.source, fallback.thinking)
 
@@ -106,9 +107,10 @@ async function readAgentRequest(
 }
 
 async function verifyAgentAccess(
+  httpRequest: Request,
   request: SanitizedRequest,
   env: AgentApiEnv,
-): Promise<{ status: "eligible" | "locked" | "unconfigured"; reason: string }> {
+): Promise<{ status: "eligible" | "locked"; reason: string }> {
   if (env.SAFECAFE_AGENT_TEST_VERIFIED_ACCESS === "true") {
     return { status: "eligible", reason: "Test-only server-side eligibility override passed." }
   }
@@ -118,36 +120,35 @@ async function verifyAgentAccess(
       reason: "No valid wallet address was provided for server-side eligibility verification.",
     }
   }
-  if (!env.SAFECAFE_RPC_URL) {
-    return { status: "unconfigured", reason: "Server-side RPC is not configured, so remote Agent access stays locked." }
+  if (!request.context.subjectAccount || !isAddress(request.context.subjectAccount)) {
+    return {
+      status: "locked",
+      reason: "No valid staking subject address was provided for server-side eligibility verification.",
+    }
   }
   try {
-    const account = getAddress(request.context.account)
-    const client = createPublicClient({ chain: ethereumMainnet, transport: http(env.SAFECAFE_RPC_URL) })
-    const [safeBalance, totalStaked] = await Promise.all([
-      client.readContract({
-        address: CONTRACTS.safeToken,
-        abi: erc20Abi,
-        functionName: "balanceOf",
-        args: [account],
-      }),
-      client.readContract({
-        address: CONTRACTS.staking,
-        abi: stakingAbi,
-        functionName: "totalStakerStakes",
-        args: [account],
-      }),
-    ])
-    return safeBalance > 0n || totalStaked > 0n
-      ? { status: "eligible", reason: "Server-side SAFE balance/staking position check passed." }
-      : { status: "locked", reason: "Server-side check found no SAFE balance or staking position." }
+    const signer = getAddress(request.context.account)
+    const subject = getAddress(request.context.subjectAccount)
+    const session = await readRpcSession(httpRequest, env)
+    if (!session) {
+      return { status: "locked", reason: "Authenticated wallet session is required for live Agent access." }
+    }
+    if (
+      session.signer.toLowerCase() !== signer.toLowerCase() ||
+      session.subject.toLowerCase() !== subject.toLowerCase()
+    ) {
+      return { status: "locked", reason: "Authenticated wallet session does not match the requested staking account." }
+    }
+    return (await verifySafeStakingSubjectAccess({ signer, subject }, env))
+      ? { status: "eligible", reason: "Server-side Safe control and SAFE/staking position check passed." }
+      : { status: "locked", reason: "Server-side check found no controlled SAFE balance or staking position." }
   } catch {
     return { status: "locked", reason: "Server-side eligibility check failed." }
   }
 }
 
 function lockedOrFallbackReply(access: {
-  status: "eligible" | "locked" | "unconfigured"
+  status: "eligible" | "locked"
   reason: string
 }): { content: string; source: "fallback"; thinking: string } | null {
   if (access.status === "eligible") return null
@@ -339,7 +340,8 @@ function buildUpstreamMessages(request: SanitizedRequest) {
       role: "system",
       content: `Current app context: ${JSON.stringify({
         ...request.context,
-        account: request.context.account ? "verified" : null,
+        account: request.context.account ? "verified-signer" : null,
+        subjectAccount: request.context.subjectAccount ? "verified-subject" : null,
       })}`,
     },
     ...request.messages,
@@ -410,6 +412,8 @@ function summarizeContext(value: unknown): SanitizedRequest["context"] {
     return {
       account: null,
       accountConnected: false,
+      subjectAccount: null,
+      subjectKind: "self",
       chainId: null,
       hasLiveSnapshot: false,
       hasStakingPosition: false,
@@ -419,9 +423,15 @@ function summarizeContext(value: unknown): SanitizedRequest["context"] {
   }
   const context = value as Record<string, unknown>
   const account = typeof context.account === "string" && isAddress(context.account) ? getAddress(context.account) : null
+  const subjectAccount =
+    typeof context.subjectAccount === "string" && isAddress(context.subjectAccount)
+      ? getAddress(context.subjectAccount)
+      : account
   return {
     account,
     accountConnected: typeof context.account === "string",
+    subjectAccount,
+    subjectKind: context.subjectKind === "safe" ? "safe" : "self",
     chainId: context.chainId ?? null,
     liveBlock: context.liveBlock ?? null,
     hasLiveSnapshot: Boolean(context.hasLiveSnapshot),

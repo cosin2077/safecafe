@@ -25,3 +25,10 @@ export const merkleDropAbi = parseAbi([
   "function cumulativeClaimed(address account) view returns (uint256)",
   "function claim(address account, uint256 cumulativeAmount, bytes32 expectedMerkleRoot, bytes32[] merkleProof)",
 ])
+
+export const safeAccountAbi = parseAbi([
+  "function getOwners() view returns (address[])",
+  "function isOwner(address owner) view returns (bool)",
+])
+
+export const erc1271Abi = parseAbi(["function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4)"])

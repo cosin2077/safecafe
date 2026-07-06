@@ -5,18 +5,21 @@ import { resolveAgentValidator } from "./validators"
 
 export function compileAgentPlan(instruction: string, intent: AgentIntent, context: AgentContext): AgentPlan {
   const baseRisks = validateContext(context)
+  const subjectAccount = stakingSubject(context)
   const plan: AgentPlan = {
     id: `agent-${Date.now().toString(36)}`,
     instruction,
     intent,
-    account: context.account,
+    account: subjectAccount,
+    signerAccount: context.account,
+    subjectKind: context.subjectKind ?? "self",
     createdAtBlock: context.liveBlock,
     phases: [],
     risks: [...baseRisks],
   }
 
   if (baseRisks.some((risk) => risk.severity === "blocked")) return plan
-  if (!context.account || !context.liveSnapshot) return plan
+  if (!subjectAccount || !context.liveSnapshot) return plan
 
   try {
     if (intent.kind === "stake" || intent.kind === "compound-liquid") {
@@ -33,7 +36,7 @@ export function compileAgentPlan(instruction: string, intent: AgentIntent, conte
             planStake({
               validator: validator.address,
               amount: amount.text,
-              account: context.account,
+              account: subjectAccount,
               allowance: context.liveSnapshot.stakingAllowance,
             }),
           ],
@@ -52,7 +55,7 @@ export function compileAgentPlan(instruction: string, intent: AgentIntent, conte
           id: "unstake",
           title: `Unstake ${amount.text} SAFE from ${validator.label}`,
           executableNow: true,
-          plans: [planUnstake({ validator: validator.address, amount: amount.text, account: context.account })],
+          plans: [planUnstake({ validator: validator.address, amount: amount.text, account: subjectAccount })],
           risks,
         })
       }
@@ -69,7 +72,7 @@ export function compileAgentPlan(instruction: string, intent: AgentIntent, conte
           id: "claim-withdrawal",
           title: "Claim available withdrawal",
           executableNow: true,
-          plans: [planClaimWithdrawal(context.account)],
+          plans: [planClaimWithdrawal(subjectAccount)],
           risks,
         })
       }
@@ -115,7 +118,7 @@ export function compileAgentPlan(instruction: string, intent: AgentIntent, conte
             id: "rebalance-withdraw",
             title: `Unstake ${amount.text} SAFE from ${from.label}`,
             executableNow: true,
-            plans: [planUnstake({ validator: from.address, amount: amount.text, account: context.account })],
+            plans: [planUnstake({ validator: from.address, amount: amount.text, account: subjectAccount })],
             risks,
           },
           {
@@ -178,6 +181,8 @@ function validateContext(context: AgentContext): AgentRisk[] {
   const risks: AgentRisk[] = []
   if (!context.account)
     risks.push(blocked("wallet-required", "Connect wallet before drafting an executable agent plan."))
+  if (!stakingSubject(context))
+    risks.push(blocked("subject-required", "Choose the wallet or Safe account whose staking position should be used."))
   if (!context.liveSnapshot)
     risks.push(blocked("live-data-required", "Load live staking data before drafting an executable agent plan."))
   if (context.chainId !== null && context.chainId !== CHAIN_ID)
@@ -200,7 +205,9 @@ function validateUnstake(userStake: bigint, amount: bigint): AgentRisk[] {
 
 function buildClaimRewardsPhase(context: AgentContext): { phase: AgentPlanPhase; risks: AgentRisk[] } {
   const risks: AgentRisk[] = []
+  const subjectAccount = stakingSubject(context)
   if (!context.account) risks.push(blocked("wallet-required", "Connect wallet before claiming rewards."))
+  if (!subjectAccount) risks.push(blocked("subject-required", "Choose a staking account before claiming rewards."))
   if (!context.rewardProof?.proof?.length)
     risks.push(blocked("reward-proof-required", "No claimable reward proof is available."))
   if (
@@ -219,10 +226,10 @@ function buildClaimRewardsPhase(context: AgentContext): { phase: AgentPlanPhase;
       title: "Claim staking rewards",
       executableNow: true,
       plans:
-        context.account && context.rewardProof?.proof
+        subjectAccount && context.rewardProof?.proof
           ? [
               planClaimRewards({
-                account: context.account,
+                account: subjectAccount,
                 cumulativeAmount: BigInt(context.rewardProof.cumulativeAmount),
                 merkleRoot: context.rewardProof.merkleRoot,
                 proof: context.rewardProof.proof,
@@ -236,4 +243,8 @@ function buildClaimRewardsPhase(context: AgentContext): { phase: AgentPlanPhase;
 
 function blocked(code: string, message: string): AgentRisk {
   return { severity: "blocked", code, message }
+}
+
+function stakingSubject(context: AgentContext) {
+  return context.subjectAccount ?? context.account
 }

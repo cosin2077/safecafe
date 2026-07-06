@@ -112,7 +112,7 @@ export async function assertUnstakePossible(
 
 export async function assertWithdrawalClaimable(globals: GlobalOptions, account: Address) {
   const snapshot = await readAccountSnapshot(createClient(globals), account)
-  const [amount, claimableAt] = snapshot.nextClaimableWithdrawal
+  const { amount, claimableAt } = snapshot.nextClaimableWithdrawal
   const now = BigInt(Math.floor(Date.now() / 1000))
   if (amount <= 0n || claimableAt > now) {
     const suffix = claimableAt > 0n ? ` Next claimable at ${new Date(Number(claimableAt) * 1000).toISOString()}.` : ""

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { privateKeyToAccount } from "viem/accounts"
 
 import {
   compileAgentPlan,
@@ -8,9 +9,20 @@ import {
   resolveAgentAmount,
   resolveAgentValidator,
 } from "../src/agent/index.ts"
-import { DEFAULT_RPC_URLS, isTxPlanForAccount, readAccountSnapshot, readHealth } from "../src/protocol/index.ts"
+import {
+  createSafenetPublicClient,
+  DEFAULT_RPC_URLS,
+  isTxPlanForAccount,
+  readAccountSnapshot,
+  readHealth,
+} from "../src/protocol/index.ts"
 import { mockAccount, mockSummary, mockValidators } from "../src/protocol/mockData.ts"
 import { handleAgentApiRequest, sanitizeAgentContent } from "../src/server/agentApi.ts"
+import {
+  handleEthereumRpcGatewayRequest,
+  handleRpcChallengeRequest,
+  handleRpcVerifyRequest,
+} from "../src/server/rpcGateway.ts"
 
 function ok(input) {
   const result = parseAgentInstruction(input, mockValidators)
@@ -102,7 +114,7 @@ const agentContext = {
     safeBalance: mockSummary.safeBalance,
     totalStaked: mockSummary.totalStaked,
     pendingWithdrawals: [],
-    nextClaimableWithdrawal: [mockSummary.claimableWithdrawals, 0n],
+    nextClaimableWithdrawal: { amount: mockSummary.claimableWithdrawals, claimableAt: 0n },
     cumulativeClaimed: 0n,
     withdrawDelay: mockSummary.withdrawDelay,
     stakingAllowance: 0n,
@@ -175,6 +187,9 @@ assert.equal(
 )
 
 assert.equal(DEFAULT_RPC_URLS[0], "https://ethereum-rpc.publicnode.com")
+assert.equal(createSafenetPublicClient({ authToken: "test-token" }).transport.type, "http")
+assert.equal(createSafenetPublicClient({ authToken: "test-token" }).transport.url, "/api/rpc/ethereum")
+assert.equal(createSafenetPublicClient().transport.type, "fallback")
 
 const fakeClient = {
   multicallCalls: [],
@@ -221,22 +236,6 @@ const lockedAgentResponse = await handleAgentApiRequest(
 assert.equal(lockedAgentResponse.status, 200)
 assert.equal((await lockedAgentResponse.json()).source, "fallback")
 
-const forgedEligibleWithoutRpcResponse = await handleAgentApiRequest(
-  new Request("http://localhost/api/agent", {
-    method: "POST",
-    body: JSON.stringify({
-      message: "hello",
-      context: { account: mockAccount, agentAccess: "eligible", hasLiveSnapshot: true, validatorLabels: [] },
-    }),
-  }),
-  {
-    SAFECAFE_LLM_API_BASE: "https://example.invalid",
-    SAFECAFE_LLM_API_MODEL: "test",
-    SAFECAFE_LLM_API_KEY: "secret",
-  },
-)
-assert.equal((await forgedEligibleWithoutRpcResponse.json()).source, "fallback")
-
 const tooLargeResponse = await handleAgentApiRequest(
   new Request("http://localhost/api/agent", {
     method: "POST",
@@ -256,8 +255,17 @@ assert.equal(invalidJsonResponse.status, 400)
 const originalFetch = globalThis.fetch
 let upstreamCalls = 0
 let unsafeStream = false
+let rpcGatewayCalls = 0
+const safeOwnerCallSelector = "0x2f54bf6e"
 globalThis.fetch = async (_url, init) => {
   const body = JSON.parse(String(init?.body ?? "{}"))
+  if (body.method === "eth_blockNumber") {
+    rpcGatewayCalls += 1
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: "0x7b" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })
+  }
   if (Array.isArray(body)) {
     return new Response(
       JSON.stringify(
@@ -271,10 +279,19 @@ globalThis.fetch = async (_url, init) => {
     )
   }
   if (body.method === "eth_call") {
-    return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: `0x${(10n ** 18n).toString(16)}` }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    })
+    if (typeof body.params?.[0]?.data === "string" && body.params[0].data.startsWith(safeOwnerCallSelector)) {
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: `0x${"0".repeat(63)}1` }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }
+    return new Response(
+      JSON.stringify({ jsonrpc: "2.0", id: body.id, result: `0x${(10n ** 18n).toString(16).padStart(64, "0")}` }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    )
   }
   upstreamCalls += 1
   if (body.stream) {
@@ -301,34 +318,23 @@ globalThis.fetch = async (_url, init) => {
   )
 }
 try {
-  const streamResponse = await handleAgentApiRequest(
+  const forgedEligibleAgentResponse = await handleAgentApiRequest(
     new Request("http://localhost/api/agent", {
       method: "POST",
-      headers: { accept: "text/event-stream" },
       body: JSON.stringify({
-        message: "help",
-        stream: true,
-        context: {
-          account: mockAccount,
-          agentAccess: "eligible",
-          hasLiveSnapshot: true,
-          hasStakingPosition: true,
-          validatorLabels: [],
-        },
+        message: "hello",
+        context: { account: mockAccount, agentAccess: "eligible", hasLiveSnapshot: true, validatorLabels: [] },
       }),
     }),
     {
-      SAFECAFE_AGENT_TEST_VERIFIED_ACCESS: "true",
       SAFECAFE_LLM_API_BASE: "https://llm.example",
       SAFECAFE_LLM_API_MODEL: "test",
       SAFECAFE_LLM_API_KEY: "secret",
     },
   )
-  assert.equal(streamResponse.headers.get("content-type")?.includes("text/event-stream"), true)
-  const streamText = await streamResponse.text()
-  assert.equal(streamText.includes('"type":"thinking"'), true)
-  assert.equal(streamText.includes('"type":"final"'), true)
-  assert.equal(upstreamCalls, 1)
+  const forgedEligibleAgentJson = await forgedEligibleAgentResponse.json()
+  assert.equal(forgedEligibleAgentJson.source, "fallback")
+  assert.equal(forgedEligibleAgentJson.thinking.includes("Authenticated wallet session is required"), true)
 
   unsafeStream = true
   const unsafeStreamResponse = await handleAgentApiRequest(
@@ -351,6 +357,200 @@ try {
   const unsafeStreamText = await unsafeStreamResponse.text()
   assert.equal(unsafeStreamText.includes("submit the transaction for you"), false)
   assert.equal(unsafeStreamText.includes('"type":"final"'), true)
+
+  const unauthenticatedRpc = await handleEthereumRpcGatewayRequest(
+    new Request("http://localhost/api/rpc/ethereum", {
+      method: "POST",
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }),
+    }),
+    { SAFECAFE_AUTH_SECRET: "test-secret" },
+  )
+  assert.equal(unauthenticatedRpc.status, 401)
+
+  const blockedMethod = await handleEthereumRpcGatewayRequest(
+    new Request("http://localhost/api/rpc/ethereum", {
+      method: "POST",
+      headers: { authorization: "Bearer bad-token" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: [] }),
+    }),
+    { SAFECAFE_AUTH_SECRET: "test-secret" },
+  )
+  assert.equal(blockedMethod.status, 401)
+
+  const testAccount = privateKeyToAccount(`0x${"11".repeat(32)}`)
+  const challengeResponse = await handleRpcChallengeRequest(
+    new Request("http://localhost/api/auth/challenge", {
+      method: "POST",
+      body: JSON.stringify({ address: testAccount.address, chainId: 1 }),
+    }),
+    { SAFECAFE_AUTH_SECRET: "test-secret", SAFECAFE_RPC_ALLOW_ALL_WALLETS: "true" },
+  )
+  assert.equal(challengeResponse.status, 200)
+  const challenge = await challengeResponse.json()
+  const tamperedMessage = challenge.message.replace("Sign in to SafeCafe RPC Gateway.", "Sign in somewhere else.")
+  const tamperedSignature = await testAccount.signMessage({ message: tamperedMessage })
+  const tamperedVerifyResponse = await handleRpcVerifyRequest(
+    new Request("http://localhost/api/auth/verify", {
+      method: "POST",
+      body: JSON.stringify({
+        address: testAccount.address,
+        challenge: challenge.challenge,
+        message: tamperedMessage,
+        signature: tamperedSignature,
+      }),
+    }),
+    { SAFECAFE_AUTH_SECRET: "test-secret", SAFECAFE_RPC_ALLOW_ALL_WALLETS: "true" },
+  )
+  assert.equal(tamperedVerifyResponse.status, 401)
+  assert.equal((await tamperedVerifyResponse.json()).error, "Challenge message does not match.")
+  const signature = await testAccount.signMessage({ message: challenge.message })
+  const verifyResponse = await handleRpcVerifyRequest(
+    new Request("http://localhost/api/auth/verify", {
+      method: "POST",
+      body: JSON.stringify({
+        address: testAccount.address,
+        challenge: challenge.challenge,
+        message: challenge.message,
+        signature,
+      }),
+    }),
+    { SAFECAFE_AUTH_SECRET: "test-secret", SAFECAFE_RPC_ALLOW_ALL_WALLETS: "true" },
+  )
+  assert.equal(verifyResponse.status, 200)
+  const session = await verifyResponse.json()
+  assert.equal(session.signer, testAccount.address)
+  assert.equal(session.subject, testAccount.address)
+  assert.equal(session.subjectKind, "self")
+
+  const authenticatedAgentResponse = await handleAgentApiRequest(
+    new Request("http://localhost/api/agent", {
+      method: "POST",
+      headers: { authorization: `Bearer ${session.token}` },
+      body: JSON.stringify({
+        message: "hello",
+        context: {
+          account: testAccount.address,
+          subjectAccount: testAccount.address,
+          agentAccess: "eligible",
+          hasLiveSnapshot: true,
+          validatorLabels: [],
+        },
+      }),
+    }),
+    {
+      SAFECAFE_AUTH_SECRET: "test-secret",
+      SAFECAFE_RPC_ALLOW_ALL_WALLETS: "true",
+      SAFECAFE_LLM_API_BASE: "https://llm.example",
+      SAFECAFE_LLM_API_MODEL: "test",
+      SAFECAFE_LLM_API_KEY: "secret",
+    },
+  )
+  const authenticatedAgentJson = await authenticatedAgentResponse.json()
+  assert.equal(authenticatedAgentJson.source, "llm")
+  assert.equal(authenticatedAgentJson.thinking.includes("Server-side RPC is not configured"), false)
+
+  const streamUpstreamCallsBefore = upstreamCalls
+  const streamResponse = await handleAgentApiRequest(
+    new Request("http://localhost/api/agent", {
+      method: "POST",
+      headers: { accept: "text/event-stream", authorization: `Bearer ${session.token}` },
+      body: JSON.stringify({
+        message: "help",
+        stream: true,
+        context: {
+          account: testAccount.address,
+          subjectAccount: testAccount.address,
+          agentAccess: "eligible",
+          hasLiveSnapshot: true,
+          hasStakingPosition: true,
+          validatorLabels: [],
+        },
+      }),
+    }),
+    {
+      SAFECAFE_AUTH_SECRET: "test-secret",
+      SAFECAFE_RPC_ALLOW_ALL_WALLETS: "true",
+      SAFECAFE_LLM_API_BASE: "https://llm.example",
+      SAFECAFE_LLM_API_MODEL: "test",
+      SAFECAFE_LLM_API_KEY: "secret",
+    },
+  )
+  assert.equal(streamResponse.headers.get("content-type")?.includes("text/event-stream"), true)
+  const streamText = await streamResponse.text()
+  assert.equal(streamText.includes('"type":"thinking"'), true)
+  assert.equal(streamText.includes('"type":"final"'), true)
+  assert.equal(upstreamCalls - streamUpstreamCallsBefore, 1)
+
+  const authenticatedRpc = await handleEthereumRpcGatewayRequest(
+    new Request("http://localhost/api/rpc/ethereum", {
+      method: "POST",
+      headers: { authorization: `Bearer ${session.token}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }),
+    }),
+    { SAFECAFE_AUTH_SECRET: "test-secret", SAFECAFE_RPC_ALLOW_ALL_WALLETS: "true" },
+  )
+  assert.equal(authenticatedRpc.status, 200)
+  assert.equal((await authenticatedRpc.json()).result, "0x7b")
+  assert.equal(rpcGatewayCalls, 1)
+
+  const authenticatedBlockedMethod = await handleEthereumRpcGatewayRequest(
+    new Request("http://localhost/api/rpc/ethereum", {
+      method: "POST",
+      headers: { authorization: `Bearer ${session.token}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: [] }),
+    }),
+    { SAFECAFE_AUTH_SECRET: "test-secret", SAFECAFE_RPC_ALLOW_ALL_WALLETS: "true" },
+  )
+  assert.equal((await authenticatedBlockedMethod.json()).error.code, -32601)
+
+  const authenticatedBlockedTarget = await handleEthereumRpcGatewayRequest(
+    new Request("http://localhost/api/rpc/ethereum", {
+      method: "POST",
+      headers: { authorization: `Bearer ${session.token}` },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "eth_call",
+        params: [{ to: `0x${"33".repeat(20)}`, data: "0x" }, "latest"],
+      }),
+    }),
+    { SAFECAFE_AUTH_SECRET: "test-secret", SAFECAFE_RPC_ALLOW_ALL_WALLETS: "true" },
+  )
+  assert.equal((await authenticatedBlockedTarget.json()).error.message, "eth_call target is not allowed.")
+
+  const managedSafe = `0x${"44".repeat(20)}`
+  const safeChallengeResponse = await handleRpcChallengeRequest(
+    new Request("http://localhost/api/auth/challenge", {
+      method: "POST",
+      body: JSON.stringify({ chainId: 1, signer: testAccount.address, subject: managedSafe }),
+    }),
+    { SAFECAFE_AUTH_SECRET: "test-secret", SAFECAFE_RPC_URL: "https://rpc.example" },
+  )
+  assert.equal(safeChallengeResponse.status, 200)
+  const safeChallenge = await safeChallengeResponse.json()
+  assert.equal(safeChallenge.signer, testAccount.address)
+  assert.equal(safeChallenge.subject, managedSafe)
+  assert.equal(safeChallenge.subjectKind, "safe")
+  assert.equal(safeChallenge.message.includes(`Staking Subject: ${managedSafe}`), true)
+  const safeSignature = await testAccount.signMessage({ message: safeChallenge.message })
+  const safeVerifyResponse = await handleRpcVerifyRequest(
+    new Request("http://localhost/api/auth/verify", {
+      method: "POST",
+      body: JSON.stringify({
+        challenge: safeChallenge.challenge,
+        message: safeChallenge.message,
+        signature: safeSignature,
+        signer: testAccount.address,
+        subject: managedSafe,
+      }),
+    }),
+    { SAFECAFE_AUTH_SECRET: "test-secret", SAFECAFE_RPC_URL: "https://rpc.example" },
+  )
+  assert.equal(safeVerifyResponse.status, 200)
+  const safeSession = await safeVerifyResponse.json()
+  assert.equal(safeSession.signer, testAccount.address)
+  assert.equal(safeSession.subject, managedSafe)
+  assert.equal(safeSession.subjectKind, "safe")
 } finally {
   globalThis.fetch = originalFetch
 }

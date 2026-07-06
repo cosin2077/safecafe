@@ -13,6 +13,7 @@ export type AgentLauncherProps = {
   t: MessageBundle
   context: AgentContext
   isSubmitting: boolean
+  rpcAuthToken: string | null
   onApplyPlan: (plan: TxPlan) => void
   onConnectWallet: () => Promise<void>
   onExportPlan: (plan: TxPlan) => void
@@ -123,6 +124,7 @@ export function AgentLauncher(props: AgentLauncherProps) {
         anchor={isMobile ? null : position}
         context={props.context}
         isSubmitting={props.isSubmitting}
+        rpcAuthToken={props.rpcAuthToken}
         onClose={() => setIsOpen(false)}
         onConnectWallet={props.onConnectWallet}
         onApplyPlan={props.onApplyPlan}

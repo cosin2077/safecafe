@@ -55,6 +55,7 @@ import {
 } from "./formatters"
 import { type Locale, messages } from "./i18n"
 import { readCachedSafePrice, writeCachedSafePrice } from "./priceCache"
+import { clearRpcSession, ensureRpcSession, readRpcSession } from "./rpcAuth"
 import {
   type Action,
   type DataStatus,
@@ -68,6 +69,7 @@ import {
 } from "./types"
 import { FullPanel, Metric } from "./ui"
 import { DashboardView, DocsView, RewardsView, ValidatorTable, ValidatorToolbar, WithdrawalsView } from "./views"
+import { createWalletIdentity, isSelfSubject, normalizeAddress } from "./walletIdentity"
 
 const navPaths = createPathMap(navItems)
 type ValidatorSort = "stake" | "participation" | "commission" | "name" | "yourStake"
@@ -97,6 +99,7 @@ export function App() {
   const [activeNav, setActiveNav] = useState<NavItem>(() => navFromPath(window.location.pathname))
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [account, setAccount] = useState<Address | null>(null)
+  const [stakingAccount, setStakingAccount] = useState<Address | null>(null)
   const [action, setAction] = useState<Action>("stake")
   const [validator, setValidator] = useState<Address>(defaultValidator.address)
   const [amount, setAmount] = useState("")
@@ -118,17 +121,20 @@ export function App() {
   const [rewardProof, setRewardProof] = useState<Awaited<ReturnType<typeof fetchRewardProof>> | null>(null)
   const [liveMerkleRoot, setLiveMerkleRoot] = useState<string | null>(null)
   const [chainId, setChainId] = useState<number | null>(null)
+  const [rpcAuthToken, setRpcAuthToken] = useState<string | null>(() => readRpcSession(null)?.token ?? null)
   const [txProgress, setTxProgress] = useState("")
   const [validatorStakeError, setValidatorStakeError] = useState("")
   const [safePrice, setSafePrice] = useState<SafePriceState>(() => readCachedSafePrice())
 
   const t = messages[locale]
   const connectedAccount = account
+  const walletIdentity = useMemo(() => createWalletIdentity(account, stakingAccount), [account, stakingAccount])
+  const subjectAccount = walletIdentity.subject
   const selectedValidator = useMemo(
     () => findValidator(validators, validator) ?? validators[0] ?? defaultValidator,
     [validator, validators],
   )
-  const hasLiveAccountData = Boolean(account && liveSnapshot)
+  const hasLiveAccountData = Boolean(subjectAccount && liveSnapshot)
   const visibleValidators = useMemo(() => {
     const query = validatorQuery.trim().toLowerCase()
     const filtered = validators.filter((item) => {
@@ -154,7 +160,7 @@ export function App() {
     if (!liveSnapshot) return emptySummary
     const pendingWithdrawals = liveSnapshot.pendingWithdrawals.reduce((sum, item) => sum + item.amount, 0n)
     const now = BigInt(Math.floor(Date.now() / 1000))
-    const [nextAmount, nextClaimableAt] = liveSnapshot.nextClaimableWithdrawal
+    const { amount: nextAmount, claimableAt: nextClaimableAt } = liveSnapshot.nextClaimableWithdrawal
     return {
       safeBalance: liveSnapshot.safeBalance,
       totalStaked: liveSnapshot.totalStaked,
@@ -199,6 +205,8 @@ export function App() {
   const agentContext = useMemo(
     () => ({
       account,
+      subjectAccount,
+      subjectKind: walletIdentity.subjectKind,
       chainId,
       liveBlock,
       liveSnapshot,
@@ -207,7 +215,18 @@ export function App() {
       rewardProof,
       liveMerkleRoot,
     }),
-    [account, chainId, liveBlock, liveMerkleRoot, liveSnapshot, rewardProof, summary, validators],
+    [
+      account,
+      chainId,
+      liveBlock,
+      liveMerkleRoot,
+      liveSnapshot,
+      rewardProof,
+      subjectAccount,
+      summary,
+      validators,
+      walletIdentity.subjectKind,
+    ],
   )
 
   const toast = useCallback((message: string, tone: Toast["tone"] = "info", title?: string) => {
@@ -292,7 +311,7 @@ export function App() {
   }, [t.validatorInfoFailed, toast])
 
   const refreshLiveReads = useCallback(
-    async (target = account) => {
+    async (target = subjectAccount, authToken = rpcAuthToken, identity = walletIdentity) => {
       if (!target) {
         toast(t.connectToLoad, "warning")
         return
@@ -300,7 +319,13 @@ export function App() {
       setIsReadingLive(true)
       setLiveError("")
       try {
-        const { health, snapshot, validatorsWithPositions } = await readLiveData(target)
+        let token = authToken
+        if (!token && window.ethereum && identity.signer && identity.subject) {
+          const session = await ensureRpcSession(identity, window.ethereum)
+          token = session?.token ?? null
+          setRpcAuthToken(token)
+        }
+        const { health, snapshot, validatorsWithPositions } = await readLiveData(target, token)
         setLiveSnapshot(snapshot)
         setLiveBlock(health.blockNumber)
         setLiveMerkleRoot(health.merkleRoot)
@@ -328,7 +353,7 @@ export function App() {
         setIsReadingLive(false)
       }
     },
-    [account, t.connectToLoad, t.liveDataFailed, t.liveLoaded, toast],
+    [rpcAuthToken, subjectAccount, t.connectToLoad, t.liveDataFailed, t.liveLoaded, toast, walletIdentity],
   )
 
   useEffect(() => {
@@ -342,19 +367,27 @@ export function App() {
       .then(async (accounts) => {
         const [first] = accounts as Address[]
         if (!first) return
-        setAccount(first)
-        await refreshLiveReads(first)
+        const identity = createWalletIdentity(first)
+        setAccount(identity.signer)
+        setStakingAccount(identity.subject)
+        const session = readRpcSession(identity)
+        setRpcAuthToken(session?.token ?? null)
+        await refreshLiveReads(identity.subject, session?.token ?? null, identity)
       })
       .catch(() => undefined)
 
     const handleAccountsChanged = (accounts: unknown) => {
       const [first] = accounts as Address[]
-      setAccount(first ?? null)
+      const identity = createWalletIdentity(first ?? null)
+      setAccount(identity.signer)
+      setStakingAccount(identity.subject)
       setTxPlan(null)
       setLiveSnapshot(null)
       setRewardProof(null)
       setLiveRewards(null)
-      if (first) void refreshLiveReads(first)
+      const session = first ? readRpcSession(identity) : null
+      setRpcAuthToken(session?.token ?? null)
+      if (first) void refreshLiveReads(identity.subject, session?.token ?? null, identity)
     }
     const handleChainChanged = (value: unknown) => {
       setChainId(Number.parseInt(value as string, 16))
@@ -362,7 +395,10 @@ export function App() {
         ?.request({ method: "eth_accounts" })
         .then((accounts) => {
           const [first] = accounts as Address[]
-          if (first) void refreshLiveReads(first)
+          const identity = createWalletIdentity(first ?? null)
+          const session = first ? readRpcSession(identity) : null
+          setRpcAuthToken(session?.token ?? null)
+          if (first) void refreshLiveReads(identity.subject, session?.token ?? null, identity)
         })
         .catch(() => undefined)
     }
@@ -404,10 +440,15 @@ export function App() {
     }
     try {
       const accounts = (await window.ethereum.request({ method: "eth_requestAccounts" })) as Address[]
-      setAccount(accounts[0])
+      const identity = createWalletIdentity(accounts[0] ?? null)
+      setAccount(identity.signer)
+      setStakingAccount(identity.subject)
       await ensureMainnet()
+      if (!identity.signer || !identity.subject) throw new Error(t.noAccount)
+      const session = await ensureRpcSession(identity, window.ethereum)
+      setRpcAuthToken(session?.token ?? null)
       toast(t.walletReady, "success")
-      await refreshLiveReads(accounts[0])
+      await refreshLiveReads(identity.subject, session?.token ?? null, identity)
     } catch (error) {
       toast(error instanceof Error ? error.message : t.wrongNetwork, "warning")
     }
@@ -415,11 +456,14 @@ export function App() {
 
   function disconnectWallet() {
     setAccount(null)
+    setStakingAccount(null)
     setLiveSnapshot(null)
     setLiveRewards(null)
     setRewardProof(null)
     setTxPlan(null)
     setTxProgress("")
+    clearRpcSession()
+    setRpcAuthToken(null)
     toast(t.walletDisconnected, "info")
   }
 
@@ -443,11 +487,11 @@ export function App() {
       await connectWallet()
       return
     }
-    await refreshLiveReads(account)
+    await refreshLiveReads(subjectAccount)
   }
 
   async function buildPlan(nextAction = action) {
-    if (!account || !liveSnapshot) {
+    if (!subjectAccount || !liveSnapshot) {
       setTxPlan(null)
       toast(t.connectToPlan, "warning")
       return
@@ -461,13 +505,13 @@ export function App() {
     try {
       let nextPlan: TxPlan | null = null
       if (nextAction === "stake") {
-        nextPlan = planStake({ validator, amount, account, allowance: liveSnapshot.stakingAllowance })
+        nextPlan = planStake({ validator, amount, account: subjectAccount, allowance: liveSnapshot.stakingAllowance })
       }
       if (nextAction === "unstake") {
-        nextPlan = planUnstake({ validator, amount, account })
+        nextPlan = planUnstake({ validator, amount, account: subjectAccount })
       }
       if (nextAction === "claim-withdrawal") {
-        nextPlan = planClaimWithdrawal(account)
+        nextPlan = planClaimWithdrawal(subjectAccount)
       }
       if (nextAction === "claim-rewards") {
         if (!rewardProof?.proof) throw new Error(t.noProof)
@@ -476,7 +520,7 @@ export function App() {
         }
         if ((liveRewards ?? 0n) <= 0n) throw new Error(t.noProof)
         nextPlan = planClaimRewards({
-          account,
+          account: subjectAccount,
           cumulativeAmount: BigInt(rewardProof.cumulativeAmount),
           merkleRoot: rewardProof.merkleRoot,
           proof: rewardProof.proof,
@@ -496,13 +540,13 @@ export function App() {
   }
 
   async function simulateTxPlan(plan: TxPlan): Promise<TxPlan> {
-    if (!account) return plan
-    const client = createSafenetPublicClient(import.meta.env.VITE_RPC_URL)
+    if (!subjectAccount) return plan
+    const client = createSafenetPublicClient({ authToken: rpcAuthToken, rpcUrl: import.meta.env.VITE_RPC_URL })
     const txsToSimulate = usesApprovalBeforeStake(plan) ? plan.txs.slice(0, 1) : plan.txs
     try {
       for (const tx of txsToSimulate) {
         await client.call({
-          account,
+          account: subjectAccount,
           to: tx.to,
           data: tx.data,
           value: tx.value,
@@ -551,7 +595,8 @@ export function App() {
     setTxProgress("")
     try {
       await ensureMainnet()
-      if (!isTxPlanForAccount(planToSubmit, account)) throw new Error(t.agentAccountChanged)
+      if (!subjectAccount || !isTxPlanForAccount(planToSubmit, subjectAccount)) throw new Error(t.agentAccountChanged)
+      if (!isSelfSubject(walletIdentity)) throw new Error(t.safeSubjectExportOnly)
       const validation = planToSubmit.action === "agent-plan" ? null : validateAction(planToSubmit.action)
       if (validation) throw new Error(validation)
       if (!planToSubmit.simulation) throw new Error(t.connectToPlan)
@@ -561,12 +606,12 @@ export function App() {
         chain: ethereumMainnet,
         transport: custom(window.ethereum),
       })
-      const publicClient = createSafenetPublicClient(import.meta.env.VITE_RPC_URL)
+      const publicClient = createSafenetPublicClient({ authToken: rpcAuthToken, rpcUrl: import.meta.env.VITE_RPC_URL })
       for (const tx of planToSubmit.txs) {
         setTxProgress(`${t.simulationStatus}: ${translateTxLabel(tx.label, t)}`)
         try {
           await publicClient.call({
-            account,
+            account: subjectAccount,
             to: tx.to,
             data: tx.data,
             value: tx.value,
@@ -584,7 +629,7 @@ export function App() {
         toast(`${t.submittedTx} ${translateTxLabel(tx.label, t)}: ${compactAddress(hash, 10, 8)}`, "success")
         await publicClient.waitForTransactionReceipt({ hash })
       }
-      await refreshLiveReads(account)
+      await refreshLiveReads(subjectAccount)
     } catch (error) {
       toast(error instanceof Error ? error.message : t.transactionFailed, "warning")
     } finally {
@@ -594,7 +639,7 @@ export function App() {
   }
 
   function validateAction(targetAction = action): string | null {
-    if (!account || !liveSnapshot) return t.connectToPlan
+    if (!subjectAccount || !liveSnapshot) return t.connectToPlan
     if (chainId !== null && chainId !== CHAIN_ID) return t.wrongNetwork
     if (targetAction === "stake" || targetAction === "unstake") {
       const parsedAmount = safeParsedAmount(amount)
@@ -614,7 +659,7 @@ export function App() {
 
   function selectAction(nextAction: Action) {
     setAction(nextAction)
-    if (account && liveSnapshot) {
+    if (subjectAccount && liveSnapshot) {
       void buildPlan(nextAction)
     } else {
       setTxPlan(null)
@@ -627,7 +672,7 @@ export function App() {
       toast(t.connectToPlan, "warning")
       return
     }
-    if (account && !isTxPlanForAccount(planToExport, account)) {
+    if (subjectAccount && !isTxPlanForAccount(planToExport, subjectAccount)) {
       toast(t.agentAccountChanged, "warning")
       return
     }
@@ -747,7 +792,11 @@ export function App() {
           <div className="section-heading">
             <div>
               <h1>{t.accountSummary}</h1>
-              <p>{liveSnapshot && account ? `${t.liveDataFor} ${compactAddress(account)}.` : t.connectToBegin}</p>
+              <p>
+                {liveSnapshot && subjectAccount
+                  ? `${t.liveDataFor} ${compactAddress(subjectAccount)}.`
+                  : t.connectToBegin}
+              </p>
             </div>
             <div className="button-row">
               <div className={`price-chip ${safePrice.stale ? "stale" : ""}`}>
@@ -877,7 +926,7 @@ export function App() {
         )}
         {activeNav === "rewards" && (
           <RewardsView
-            account={connectedAccount}
+            account={subjectAccount}
             copyText={copyText}
             t={t}
             exportSafePayload={exportSafePayload}
@@ -893,7 +942,7 @@ export function App() {
         )}
         {activeNav === "withdrawals" && (
           <WithdrawalsView
-            account={connectedAccount}
+            account={subjectAccount}
             copyText={copyText}
             t={t}
             exportSafePayload={exportSafePayload}
@@ -922,12 +971,43 @@ export function App() {
       {modal && (
         <DetailModal
           account={account}
+          signerAccount={account}
+          subjectAccount={subjectAccount}
+          subjectKind={walletIdentity.subjectKind}
           copyText={copyText}
           dataStatus={dataStatus}
           disconnectWallet={disconnectWallet}
           modal={modal}
           onClose={() => setModal(null)}
           openExplorer={openExplorer}
+          onRefreshSubject={(subject) => {
+            const nextSubject = normalizeAddress(subject)
+            if (!account || !nextSubject) {
+              toast(t.invalidSafeAccount, "warning")
+              return
+            }
+            const identity = createWalletIdentity(account, nextSubject)
+            setStakingAccount(identity.subject)
+            setTxPlan(null)
+            setLiveSnapshot(null)
+            setRewardProof(null)
+            setLiveRewards(null)
+            const session = readRpcSession(identity)
+            setRpcAuthToken(session?.token ?? null)
+            void refreshLiveReads(identity.subject, session?.token ?? null, identity)
+          }}
+          onUseSignerAsSubject={() => {
+            if (!account) return
+            const identity = createWalletIdentity(account)
+            setStakingAccount(identity.subject)
+            setTxPlan(null)
+            setLiveSnapshot(null)
+            setRewardProof(null)
+            setLiveRewards(null)
+            const session = readRpcSession(identity)
+            setRpcAuthToken(session?.token ?? null)
+            void refreshLiveReads(identity.subject, session?.token ?? null, identity)
+          }}
           t={t}
         />
       )}
@@ -946,6 +1026,7 @@ export function App() {
         t={t}
         context={agentContext}
         isSubmitting={isSubmitting}
+        rpcAuthToken={rpcAuthToken}
         onConnectWallet={connectWallet}
         onSimulatePlan={simulateTxPlan}
         onExportPlan={exportSafePayload}
@@ -977,13 +1058,13 @@ function ToastItem(props: { closeLabel: string; item: Toast; notificationLabel: 
 
 const liveReadCache = new Map<string, Promise<LiveReadResult>>()
 
-async function readLiveData(account: Address): Promise<LiveReadResult> {
-  const cacheKey = `${account.toLowerCase()}:${import.meta.env.VITE_RPC_URL ?? ""}`
+async function readLiveData(account: Address, authToken: string | null): Promise<LiveReadResult> {
+  const cacheKey = `${account.toLowerCase()}:${authToken ? "gateway" : (import.meta.env.VITE_RPC_URL ?? "")}`
   const cached = liveReadCache.get(cacheKey)
   if (cached) return cached
 
   const request = (async () => {
-    const client = createSafenetPublicClient(import.meta.env.VITE_RPC_URL)
+    const client = createSafenetPublicClient({ authToken, rpcUrl: import.meta.env.VITE_RPC_URL })
     const [snapshot, health, validatorMetadata] = await Promise.all([
       readAccountSnapshot(client, account),
       readHealth(client),

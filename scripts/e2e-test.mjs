@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process"
 import { createServer } from "node:net"
 import { chromium } from "@playwright/test"
+import { privateKeyToAccount } from "viem/accounts"
 
 const previewPort = await getAvailablePort()
-const baseUrl = `http://127.0.0.1:${previewPort}`
+const baseUrl = process.env.E2E_BASE_URL || `http://127.0.0.1:${previewPort}`
 
 function getAvailablePort() {
   return new Promise((resolve, reject) => {
@@ -71,41 +72,47 @@ async function assertChatScrolledToBottom(dialog) {
   }
 }
 
-const preview = spawn(
-  "pnpm",
-  [
-    "exec",
-    "wrangler",
-    "pages",
-    "dev",
-    "dist",
-    "--ip",
-    "127.0.0.1",
-    "--port",
-    String(previewPort),
-    "--env-file",
-    ".env",
-    "--compatibility-date",
-    "2026-05-14",
-    "--log-level",
-    "error",
-  ],
-  {
-    stdio: ["ignore", "pipe", "pipe"],
-  },
-)
-
 let logs = ""
-preview.stdout.on("data", (chunk) => {
+const preview = process.env.E2E_BASE_URL
+  ? null
+  : spawn(
+      "pnpm",
+      [
+        "exec",
+        "wrangler",
+        "pages",
+        "dev",
+        "dist",
+        "--ip",
+        "127.0.0.1",
+        "--port",
+        String(previewPort),
+        "--env-file",
+        ".env",
+        "--binding",
+        "SAFECAFE_RPC_ALLOW_ALL_WALLETS=true",
+        "--binding",
+        "SAFECAFE_AUTH_SECRET=safecafe-e2e-auth-secret",
+        "--compatibility-date",
+        "2026-05-14",
+        "--log-level",
+        "error",
+      ],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    )
+
+preview?.stdout.on("data", (chunk) => {
   logs += chunk.toString()
 })
-preview.stderr.on("data", (chunk) => {
+preview?.stderr.on("data", (chunk) => {
   logs += chunk.toString()
 })
 
 let browser
 try {
-  await waitForServer(preview)
+  if (preview) await waitForServer(preview)
   browser = await chromium.launch({ headless: true })
   const page = await browser.newPage({ viewport: { width: 1280, height: 840 } })
   const consoleErrors = []
@@ -114,6 +121,21 @@ try {
   })
   page.on("pageerror", (error) => {
     consoleErrors.push(error.message)
+  })
+  await page.addInitScript(() => {
+    const originalMeasure = performance.measure.bind(performance)
+    performance.measure = (name, startOrMeasureOptions, endMark) => {
+      const detail = typeof startOrMeasureOptions === "object" ? startOrMeasureOptions?.detail : undefined
+      const properties = detail?.devtools?.properties
+      if (Array.isArray(properties)) {
+        for (const [_key, value] of properties) {
+          if (typeof value === "string" && /^\[\d+n?(,\d+n?)*\]$/.test(value)) {
+            throw new Error(`React devtools performance detail contains a bigint tuple: ${value}`)
+          }
+        }
+      }
+      return originalMeasure(name, startOrMeasureOptions, endMark)
+    }
   })
   await page.goto(baseUrl, { waitUntil: "networkidle" })
   if (consoleErrors.length > 0) {
@@ -140,6 +162,37 @@ try {
   const streamBody = await streamResponse.text()
   if (!streamBody.includes('"type":"thinking"') || !streamBody.includes('"type":"final"')) {
     throw new Error("Expected /api/agent stream to include thinking and final events")
+  }
+
+  const testAccount = privateKeyToAccount(`0x${"22".repeat(32)}`)
+  const challengeResponse = await page.request.post(`${baseUrl}/api/auth/challenge`, {
+    data: { address: testAccount.address, chainId: 1 },
+  })
+  if (!challengeResponse.ok())
+    throw new Error(`Expected /api/auth/challenge to work, got ${challengeResponse.status()}`)
+  const challenge = await challengeResponse.json()
+  if (challenge.strategy !== "signed-wallet-access") {
+    throw new Error(`Expected signed-wallet-access strategy, got ${challenge.strategy}`)
+  }
+  const signature = await testAccount.signMessage({ message: challenge.message })
+  const verifyResponse = await page.request.post(`${baseUrl}/api/auth/verify`, {
+    data: {
+      address: testAccount.address,
+      challenge: challenge.challenge,
+      message: challenge.message,
+      signature,
+    },
+  })
+  if (!verifyResponse.ok()) throw new Error(`Expected /api/auth/verify to work, got ${verifyResponse.status()}`)
+  const session = await verifyResponse.json()
+  const rpcResponse = await page.request.post(`${baseUrl}/api/rpc/ethereum`, {
+    headers: { authorization: `Bearer ${session.token}` },
+    data: { jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] },
+  })
+  if (!rpcResponse.ok()) throw new Error(`Expected authenticated RPC to work, got ${rpcResponse.status()}`)
+  const rpcJson = await rpcResponse.json()
+  if (typeof rpcJson.result !== "string" || !rpcJson.result.startsWith("0x")) {
+    throw new Error(`Expected eth_blockNumber hex result, got ${JSON.stringify(rpcJson)}`)
   }
 
   const launcher = page.getByRole("button", { name: "Open Staking Agent" })
@@ -350,7 +403,7 @@ try {
   }
 } finally {
   await browser?.close()
-  preview.kill("SIGTERM")
+  preview?.kill("SIGTERM")
 }
 
 console.log("Browser e2e tests passed")

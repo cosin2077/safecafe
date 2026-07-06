@@ -1,5 +1,5 @@
 import { ArrowUpRight, Copy, X } from "lucide-react"
-import { type ReactNode, useEffect, useRef } from "react"
+import { type ReactNode, useEffect, useRef, useState } from "react"
 import type { Address } from "viem"
 import { CHAIN_ID, compactAddress, formatSafe } from "../protocol"
 import { merkleLabel } from "./formatters"
@@ -9,15 +9,21 @@ import { ChecklistRow, KeyValue } from "./ui"
 
 export function DetailModal(props: {
   account: Address | null
+  signerAccount: Address | null
+  subjectAccount: Address | null
+  subjectKind: "self" | "safe"
   copyText: (value: string) => Promise<void>
   dataStatus: DataStatus
   disconnectWallet: () => void
   modal: NonNullable<Modal>
   onClose: () => void
   openExplorer: (address: Address) => void
+  onRefreshSubject: (subject: string) => void
+  onUseSignerAsSubject: () => void
   t: MessageBundle
 }) {
-  const { account, dataStatus, modal, onClose, t } = props
+  const { account, dataStatus, modal, onClose, signerAccount, subjectAccount, subjectKind, t } = props
+  const [subjectInput, setSubjectInput] = useState(subjectAccount ?? "")
   const dialogRef = useRef<HTMLDivElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
@@ -33,6 +39,10 @@ export function DetailModal(props: {
     const frame = window.requestAnimationFrame(() => closeButtonRef.current?.focus())
     return () => window.cancelAnimationFrame(frame)
   }, [])
+
+  useEffect(() => {
+    setSubjectInput(subjectAccount ?? "")
+  }, [subjectAccount])
 
   let title = t.viewReadiness
   let content: ReactNode = <p>{t.readinessDescription}</p>
@@ -116,15 +126,39 @@ export function DetailModal(props: {
     title = t.wallet
     content = account ? (
       <>
-        <KeyValue label={t.walletConnected} value={compactAddress(account, 10, 8)} />
+        <KeyValue label={t.signerWallet} value={compactAddress(account, 10, 8)} />
+        <KeyValue
+          label={t.stakingSubject}
+          value={
+            subjectAccount
+              ? `${compactAddress(subjectAccount, 10, 8)} (${subjectKind === "safe" ? "Safe" : "EOA"})`
+              : t.notChecked
+          }
+        />
+        <label className="modal-field">
+          <span>{t.managedSafeAddress}</span>
+          <input
+            value={subjectInput}
+            spellCheck={false}
+            placeholder={signerAccount ?? "0x..."}
+            onChange={(event) => setSubjectInput(event.target.value)}
+          />
+        </label>
+        <p className="modal-help">{t.managedSafeHint}</p>
         <div className="modal-actions">
           <button type="button" className="soft-button" onClick={() => props.copyText(account)}>
             <Copy size={15} />
             {t.copy}
           </button>
-          <button type="button" className="soft-button" onClick={() => props.openExplorer(account)}>
+          <button type="button" className="soft-button" onClick={() => props.openExplorer(subjectAccount ?? account)}>
             <ArrowUpRight size={15} />
             {t.openExplorer}
+          </button>
+          <button type="button" className="soft-button" onClick={() => props.onRefreshSubject(subjectInput)}>
+            {t.useManagedSafe}
+          </button>
+          <button type="button" className="soft-button" onClick={props.onUseSignerAsSubject}>
+            {t.useConnectedWallet}
           </button>
           <button
             type="button"

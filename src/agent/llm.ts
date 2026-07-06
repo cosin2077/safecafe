@@ -3,9 +3,10 @@ import type { AgentContext } from "./types"
 export type AgentChatRole = "assistant" | "user"
 
 export type AgentChatRequest = {
+  authToken?: string | null
   message: string
   messages: Array<{ role: AgentChatRole; content: string }>
-  context: Pick<AgentContext, "account" | "chainId"> & {
+  context: Pick<AgentContext, "account" | "chainId" | "subjectAccount" | "subjectKind"> & {
     agentAccess: "eligible" | "locked"
     liveBlock: string | null
     hasLiveSnapshot: boolean
@@ -28,7 +29,7 @@ export type AgentStreamEvent =
 export async function requestAgentReply(request: AgentChatRequest): Promise<AgentChatResponse> {
   const response = await fetch("/api/agent", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: agentRequestHeaders(request.authToken),
     body: JSON.stringify(request),
   })
   if (!response.ok) throw new Error(`Agent API failed: ${response.status}`)
@@ -41,7 +42,7 @@ export async function requestAgentReplyStream(
 ): Promise<void> {
   const response = await fetch("/api/agent", {
     method: "POST",
-    headers: { accept: "text/event-stream", "content-type": "application/json" },
+    headers: { ...agentRequestHeaders(request.authToken), accept: "text/event-stream" },
     body: JSON.stringify({ ...request, stream: true }),
   })
   if (!response.ok) throw new Error(`Agent API failed: ${response.status}`)
@@ -73,9 +74,18 @@ export async function requestAgentReplyStream(
   }
 }
 
+function agentRequestHeaders(authToken: string | null | undefined) {
+  return {
+    "content-type": "application/json",
+    ...(authToken ? { authorization: `Bearer ${authToken}` } : {}),
+  }
+}
+
 export function toAgentChatContext(context: AgentContext): AgentChatRequest["context"] {
   return {
     account: context.account,
+    subjectAccount: context.subjectAccount ?? context.account,
+    subjectKind: context.subjectKind ?? "self",
     agentAccess: hasAgentServiceAccess(context) ? "eligible" : "locked",
     chainId: context.chainId,
     liveBlock: context.liveBlock ? context.liveBlock.toString() : null,
@@ -85,8 +95,13 @@ export function toAgentChatContext(context: AgentContext): AgentChatRequest["con
   }
 }
 
-export function hasAgentServiceAccess(context: Pick<AgentContext, "account" | "liveSnapshot" | "summary">): boolean {
+export function hasAgentServiceAccess(
+  context: Pick<AgentContext, "account" | "liveSnapshot" | "summary" | "subjectAccount">,
+): boolean {
   return Boolean(
-    context.account && context.liveSnapshot && (context.summary.safeBalance > 0n || context.summary.totalStaked > 0n),
+    context.account &&
+      (context.subjectAccount ?? context.account) &&
+      context.liveSnapshot &&
+      (context.summary.safeBalance > 0n || context.summary.totalStaked > 0n),
   )
 }
