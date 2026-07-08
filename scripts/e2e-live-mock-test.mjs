@@ -44,6 +44,7 @@ try {
     await driver.openAndConnect()
     await driver.expectSummary({ safeBalance: "100.00" })
   })
+  await runScenario("staking decision and trust surfaces", () => runDecisionSurfaceFlow(page, driver))
   await runScenario("safe multisig discovery and selection", () => runSafeDiscoveryFlow(page))
   await runScenario("dashboard tab switching and validation timing", () => runDashboardTabPersistenceFlow(driver))
   await runScenario("empty unstake tab switching", () => runEmptyUnstakeTabSwitchingFlow(driver, chain))
@@ -69,6 +70,7 @@ try {
 }
 
 async function runDashboardTabPersistenceFlow(driver) {
+  await driver.selectDashboardAction("Stake")
   await driver.expectDashboardActionActive("Stake")
   await driver.selectDashboardAction("Unstake")
   await driver.expectDashboardActionActive("Unstake")
@@ -96,11 +98,38 @@ async function runSafeDiscoveryFlow(page) {
   await walletDialog.getByRole("button", { name: "Safe multisig address" }).click()
   await page.getByRole("option", { name: /Safe multisig address 1/ }).click()
   const stakingSubjectRow = walletDialog.locator(".address-row", { hasText: "Staking account" })
-  await stakingSubjectRow.getByText("Safe", { exact: true }).waitFor()
+  await stakingSubjectRow.getByText(/Safe - 1\/1 multisig/).waitFor()
   await stakingSubjectRow.getByText("0x11111111...11111111").waitFor()
   await walletDialog.getByRole("button", { name: "Use current wallet" }).click()
   await walletDialog.locator(".panel-title .icon-button").click()
   await walletDialog.waitFor({ state: "hidden" })
+}
+
+async function runDecisionSurfaceFlow(page, driver) {
+  await page.getByText("Current APY").waitFor()
+  await page.getByText("Protocol TVL").waitFor()
+  await page.getByText("Unstake delay").waitFor()
+  await page.getByText("Trust & Verification").waitFor()
+  await page.getByText("Ethereum Mainnet · Chain ID 1").waitFor()
+  await page.getByText("Transaction Preview").waitFor()
+  await page.getByText("Estimated Gas").waitFor()
+  await page.getByText("Wallet confirmation").waitFor()
+  await driver.selectDashboardAction("Claim Rewards")
+  await page.getByRole("button", { name: "Claim to wallet" }).waitFor()
+  await page.getByRole("button", { name: "Claim & restake" }).waitFor()
+  await page.getByRole("button", { exact: true, name: "Withdrawals" }).click()
+  const timeline = page.locator(".withdrawal-timeline")
+  await timeline.getByText("Withdrawal Timeline").waitFor()
+  await timeline.getByText("Submitted", { exact: true }).waitFor()
+  await timeline.getByText("Unlocking", { exact: true }).waitFor()
+  await timeline.getByText("Claimable", { exact: true }).waitFor()
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Overview" }).click()
+  await driver.selectDashboardAction("Stake")
+  await page.getByRole("button", { exact: true, name: "Rewards" }).click()
+  const rewardsPreview = page.locator(".workflow-panel .transaction-preview")
+  await rewardsPreview.getByText("Claim to wallet:").waitFor()
+  await rewardsPreview.getByText("Claim & restake:").waitFor()
+  await rewardsPreview.getByText("Core Contributors").waitFor()
 }
 
 async function runEmptyUnstakeTabSwitchingFlow(driver, chain) {
@@ -124,9 +153,12 @@ async function runDashboardValidatorDetailsFlow(driver) {
 }
 
 async function runUnstakeMaxPrecisionFlow(driver, chain) {
+  await driver.refreshLiveData()
   const coreStakeBeforeMax = chain.state.validators[0].userStake
   const safeBalanceBeforeClaim = chain.state.safeBalance
-  await driver.selectDashboardAction("Unstake")
+  await driver.selectValidatorTableAction({ action: "Unstake", validatorLabel: "Core Contributors" })
+  await driver.expectCurrentActionSelectDetail("Core Contributors")
+  await driver.expectCurrentActionSelectDetail("Your Stake 20.01 SAFE")
   await driver.clickActionMax()
   await driver.expectNoVisibleText("Your stake on this validator is insufficient.")
   await driver.submitPrimaryAction()
@@ -145,9 +177,12 @@ async function runStakeFlow(driver) {
   const signCountBefore = await driver.walletPersonalSignCount()
   await driver.stake({ amount: "10" })
   const signCountAfter = await driver.walletPersonalSignCount()
-  if (signCountAfter !== signCountBefore) {
-    throw new Error(`Expected regular stake to avoid auth signing, got ${signCountAfter - signCountBefore} signatures`)
+  if (signCountAfter !== signCountBefore + 1) {
+    throw new Error(
+      `Expected regular stake to unlock protected RPC with one signature, got ${signCountAfter - signCountBefore} signatures`,
+    )
   }
+  await driver.expectRecentRpcRequestsAuthorized(2)
   await driver.expectSafeBalance(formatSafeAmount(chain.state.safeBalance))
   await driver.expectValidatorStake({ amount: "10" })
   await driver.expectSummary({

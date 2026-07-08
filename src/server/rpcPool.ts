@@ -28,19 +28,18 @@ async function fetchChainRpcPool(): Promise<string[]> {
       headers: { accept: "application/json" },
       signal: AbortSignal.timeout(10_000),
     })
-    if (!response.ok) return getHardcodedPool()
+    if (!response.ok) return cachePool(getHardcodedPool())
 
     const chains = (await response.json()) as ChainEntry[]
     const ethChain = chains.find((c) => c.chainId === ETHEREUM_MAINNET_CHAIN_ID)
-    if (!ethChain?.rpc?.length) return getHardcodedPool()
+    if (!ethChain?.rpc?.length) return cachePool(getHardcodedPool())
 
     const urls = extractValidRpcs(ethChain.rpc)
-    if (urls.length === 0) return getHardcodedPool()
+    if (urls.length === 0) return cachePool(getHardcodedPool())
 
-    poolCache = { expiresAt: Date.now() + poolCacheTtlMs, urls }
-    return urls
+    return cachePool(urls)
   } catch {
-    return getHardcodedPool()
+    return cachePool(getHardcodedPool())
   }
 }
 
@@ -51,14 +50,19 @@ function extractValidRpcs(rpcList: ChainEntry["rpc"]): string[] {
     const url = typeof entry === "string" ? entry : entry?.url
     if (!url) continue
     if (seen.has(url)) continue
-    // Skip WebSocket endpoints
-    if (url.startsWith("wss://") || url.startsWith("ws://")) continue
+    // Server-side proxying should not use cleartext or WebSocket endpoints.
+    if (!url.startsWith("https://")) continue
     // Skip template URLs requiring API keys
     if (url.includes("${")) continue
     seen.add(url)
     result.push(url)
   }
   return result
+}
+
+function cachePool(urls: string[]) {
+  poolCache = { expiresAt: Date.now() + poolCacheTtlMs, urls }
+  return urls
 }
 
 function getHardcodedPool(): string[] {

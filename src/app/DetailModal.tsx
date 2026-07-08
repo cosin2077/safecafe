@@ -139,7 +139,7 @@ export function DetailModal(props: {
         <AddressRow
           label={t.stakingSubject}
           address={subjectAccount}
-          suffix={subjectKind === "safe" ? (formatSafeMultisigBadge(selectedDiscoveredSafe, t) ?? "Safe") : "EOA"}
+          suffix={subjectKind === "safe" ? formatSafeSubjectBadge(selectedDiscoveredSafe, t) : "EOA"}
           fallback={t.notChecked}
           copyLabel={t.copy}
           openLabel={t.openExplorer}
@@ -242,6 +242,11 @@ function findDiscoveredSafe(safes: DiscoveredSafe[], address: Address | null): D
 function formatSafeMultisigBadge(safe: DiscoveredSafe | null, t: MessageBundle): string | null {
   if (!safe || safe.threshold === null || safe.ownersCount === null) return null
   return `${safe.threshold}/${safe.ownersCount} ${t.safeMultisigBadge}`
+}
+
+function formatSafeSubjectBadge(safe: DiscoveredSafe | null, t: MessageBundle) {
+  const badge = formatSafeMultisigBadge(safe, t)
+  return badge ? t.safeSubjectBadge.replace("{badge}", badge) : t.safeWallet
 }
 
 function AddressRow(props: {

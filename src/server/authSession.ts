@@ -59,7 +59,10 @@ export function createAuthMessage(input: {
   return `${input.domain} wants you to sign in with your Ethereum account:
 ${input.signer}
 
-Sign in to SafeCafe RPC Gateway.
+Sign in to SafeCafe.
+
+This gas-free signature only unlocks rate-limited SafeCafe RPC and Staking Agent access.
+It does not authorize a transaction, move funds, or approve token spending.
 
 URI: https://${input.domain}
 Version: 1
@@ -67,9 +70,9 @@ Chain ID: ${input.chainId}
 Nonce: ${input.nonce}
 Issued At: ${input.issuedAt}
 Expiration Time: ${input.expirationTime}
-Staking Subject: ${input.subject}
-Subject Kind: ${input.subjectKind}
-Strategy: ${input.strategy}`
+Staking Account: ${input.subject}
+Account Type: ${input.subjectKind}
+Access Policy: ${input.strategy}`
 }
 
 export async function createChallengeToken(

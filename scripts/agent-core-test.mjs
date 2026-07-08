@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { encodeFunctionData } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
 
@@ -15,6 +16,7 @@ import {
   shouldRouteClarificationToAgentReply,
   toAgentChatContext,
 } from "../src/agent/index.ts"
+import { readCachedLiveData, writeCachedLiveData } from "../src/app/liveDataCache.ts"
 import {
   appStorageKeys,
   readStorageAddress,
@@ -40,11 +42,15 @@ import {
 import { mockAccount, mockSummary, mockValidators } from "../src/protocol/mockData.ts"
 import { handleAccountLiveRequest } from "../src/server/accountLive.ts"
 import { handleAgentApiRequest, sanitizeAgentContent } from "../src/server/agentApi.ts"
+import { handleRewardProofRequest, readRewardProof } from "../src/server/rewardsProof.ts"
 import {
   handleEthereumRpcGatewayRequest,
   handleRpcChallengeRequest,
   handleRpcVerifyRequest,
 } from "../src/server/rpcGateway.ts"
+import { rpcPoolTestHooks, rpcUrls } from "../src/server/rpcPool.ts"
+import { handleValidatorsRequest, readValidatorMetadata, validatorMetadataTestHooks } from "../src/server/validators.ts"
+import { assertSuccessfulReceipt } from "../src/shared/cli.ts"
 
 function parseServerSentEvents(text) {
   return text
@@ -372,7 +378,45 @@ assert.equal(createSafenetPublicClient({ authToken: "test-token" }).transport.ty
 assert.equal(createSafenetPublicClient({ authToken: "test-token" }).transport.url, "/api/rpc/ethereum")
 assert.equal(createSafenetPublicClient().transport.type, "fallback")
 assert.equal(createSafenetPublicClient({ rpcUrl: "/api/rpc/ethereum" }).transport.type, "http")
-assert.equal(createSafenetPublicClient({ rpcUrl: "/api/rpc/ethereum" }).transport.url, "/api/rpc/ethereum")
+
+const appSource = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8")
+const executeActionSource = appSource.match(
+  /async function executeAction[\s\S]*?async function executeClaimRewardsAndStake/,
+)?.[0]
+assert.ok(executeActionSource, "executeAction source should be locatable")
+assert.match(
+  executeActionSource,
+  /requireAuth:\s*true/,
+  "Manual dashboard actions must require protected RPC auth before simulation and submission.",
+)
+assert.match(
+  executeActionSource,
+  /nextAction === "claim-rewards" && !refreshed/,
+  "Claim rewards must stop if the forced live refresh fails.",
+)
+const executeClaimRewardsAndStakeSource = appSource.match(
+  /async function executeClaimRewardsAndStake[\s\S]*?async function simulateTxPlan/,
+)?.[0]
+assert.ok(executeClaimRewardsAndStakeSource, "executeClaimRewardsAndStake source should be locatable")
+assert.match(
+  executeClaimRewardsAndStakeSource,
+  /if \(!refreshed\) throw new Error\(t\.liveDataFailed\)/,
+  "Claim and restake must stop if the forced live refresh fails.",
+)
+const validateActionSource = appSource.match(/function validateAction[\s\S]*?function selectAction/)?.[0]
+assert.ok(validateActionSource, "validateAction source should be locatable")
+assert.match(validateActionSource, /targetAction === "stake" && targetValidator\.status !== "active"/)
+assert.doesNotMatch(
+  validateActionSource,
+  /if \(selectedValidator\.status !== "active"\) return t\.inactiveValidator/,
+  "Inactive validators must remain unstakeable when the user has stake.",
+)
+
+assert.doesNotThrow(() => assertSuccessfulReceipt("Stake SAFE", { blockNumber: 1n, status: "success" }))
+assert.throws(
+  () => assertSuccessfulReceipt("Stake SAFE", { blockNumber: 1n, status: "reverted" }),
+  /Transaction failed: Stake SAFE/,
+)
 
 const fakeClient = {
   multicallCalls: [],
@@ -451,8 +495,55 @@ let rpcGatewayCalls = 0
 let rpcErrorCalls = 0
 let rpcForbiddenCalls = 0
 let rpcInternalErrorCalls = 0
+let chainListCalls = 0
+let rewardProofCalls = 0
+let validatorMetadataCalls = 0
 const safeOwnerCallSelector = "0x2f54bf6e"
-const mockFetch = async (_url, init) => {
+const mockFetch = async (url, init) => {
+  if (String(url).includes("validator-info.json")) {
+    validatorMetadataCalls += 1
+    return new Response(
+      JSON.stringify([
+        {
+          address: mockValidators[0].address,
+          label: mockValidators[0].label,
+          is_active: true,
+          commission: 0.05,
+          participation_rate_14d: 0.987,
+        },
+      ]),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )
+  }
+  if (String(url).includes("/proofs/")) {
+    rewardProofCalls += 1
+    return new Response(
+      JSON.stringify({
+        cumulativeAmount: (mockSummary.cumulativeClaimed ?? mockSummary.claimableRewards).toString(),
+        merkleRoot: `0x${"11".repeat(32)}`,
+        proof: [`0x${"22".repeat(32)}`],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )
+  }
+  if (String(url).includes("chainid.network")) {
+    chainListCalls += 1
+    return new Response(
+      JSON.stringify([
+        {
+          chainId: 1,
+          rpc: [
+            "http://cleartext.example",
+            "wss://ws.example",
+            "https://chain-rpc.example",
+            "https://chain-rpc-two.example",
+            "https://chain-rpc.example",
+          ],
+        },
+      ]),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )
+  }
   const body = JSON.parse(String(init?.body ?? "{}"))
   if (body.id === 9 && body.method === "eth_getBalance") {
     return new Response("bad gateway", { status: 502 })
@@ -797,6 +888,29 @@ try {
   assert.equal(readStorageAddress(appStorageKeys.selectedValidator), subjectA)
   writeStorageAddress(appStorageKeys.selectedValidator, null)
   assert.equal(readStorageAddress(appStorageKeys.selectedValidator), null)
+  const liveCacheData = {
+    health: {
+      blockNumber: 123n,
+      merkleRoot: `0x${"11".repeat(32)}`,
+      withdrawDelay: mockSummary.withdrawDelay,
+    },
+    rewardProof: agentContext.rewardProof,
+    rewardProofStatus: "available",
+    rewards: mockSummary.claimableRewards,
+    snapshot: agentContext.liveSnapshot,
+    validatorsWithPositions: mockValidators,
+  }
+  const liveCacheFetchedAt = 2_000
+  writeCachedLiveData(subjectA, liveCacheData, liveCacheFetchedAt)
+  const liveCacheRaw = JSON.parse(storage.get(appStorageKeys.accountLiveCache))
+  assert.equal(typeof liveCacheRaw[subjectA.toLowerCase()].payload.health.blockNumber, "string")
+  const restoredLiveCache = readCachedLiveData(subjectA, liveCacheFetchedAt + 1_000)
+  assert.equal(restoredLiveCache?.fetchedAt, liveCacheFetchedAt)
+  assert.equal(restoredLiveCache?.data.health.blockNumber, 123n)
+  assert.equal(restoredLiveCache?.data.rewardProofStatus, "available")
+  assert.equal(restoredLiveCache?.data.snapshot.safeBalance, agentContext.liveSnapshot.safeBalance)
+  assert.equal(restoredLiveCache?.data.validatorsWithPositions[0].userStake, mockValidators[0].userStake)
+  assert.equal(readCachedLiveData(subjectA, liveCacheFetchedAt + 16 * 60 * 1000), null)
   removeStorageValue(appStorageKeys.walletSubjects)
   globalThis.window = originalWindow
 
@@ -1254,7 +1368,7 @@ try {
   )
   assert.equal(challengeResponse.status, 200)
   const challenge = await challengeResponse.json()
-  const tamperedMessage = challenge.message.replace("Sign in to SafeCafe RPC Gateway.", "Sign in somewhere else.")
+  const tamperedMessage = `${challenge.message}\nTampered: true`
   const tamperedSignature = await testAccount.signMessage({ message: tamperedMessage })
   const tamperedVerifyResponse = await handleRpcVerifyRequest(
     new Request("http://localhost/api/auth/verify", {
@@ -1492,12 +1606,79 @@ try {
     assert.equal(transactionLookupRpcJson.result, null, method)
   }
 
+  validatorMetadataTestHooks.resetCache()
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes("validator-info.json")) {
+      return new Response("service unavailable", { status: 503 })
+    }
+    return mockFetch(url, init)
+  }
+  const fallbackValidatorMetadata = await readValidatorMetadata(undefined, undefined, { fallback: true })
+  assert.equal(fallbackValidatorMetadata.length > 0, true)
+  const strictValidatorsAfterFallback = await handleValidatorsRequest(new Request("http://localhost/api/validators"))
+  assert.equal(strictValidatorsAfterFallback.status, 502)
+  assert.equal(strictValidatorsAfterFallback.headers.get("x-safecafe-cache"), null)
+  assert.equal((await strictValidatorsAfterFallback.json()).code, "validators_metadata_failed")
+  globalThis.fetch = mockFetch
+  validatorMetadataTestHooks.resetCache()
+
+  const validatorsResponse = await handleValidatorsRequest(new Request("http://localhost/api/validators"))
+  assert.equal(validatorsResponse.status, 200)
+  assert.equal(validatorsResponse.headers.get("x-safecafe-cache"), "MISS")
+  const validatorsJson = await validatorsResponse.json()
+  assert.equal(validatorsJson.validators.length, 1)
+  assert.equal(validatorsJson.validators[0].address, mockValidators[0].address)
+  assert.equal(validatorsJson.validators[0].totalStake, "0")
+  assert.equal(validatorMetadataCalls, 1)
+
+  const cachedValidatorsResponse = await handleValidatorsRequest(new Request("http://localhost/api/validators"))
+  assert.equal(cachedValidatorsResponse.status, 200)
+  assert.equal(cachedValidatorsResponse.headers.get("x-safecafe-cache"), "HIT")
+  assert.equal((await cachedValidatorsResponse.json()).requestId.length > 0, true)
+  assert.equal(validatorMetadataCalls, 1)
+
+  const rewardProofResponse = await handleRewardProofRequest(
+    new Request(`http://localhost/api/rewards/proof?account=${testAccount.address}`),
+  )
+  assert.equal(rewardProofResponse.status, 200)
+  const rewardProofJson = await rewardProofResponse.json()
+  assert.equal(rewardProofJson.proof.cumulativeAmount, mockSummary.claimableRewards.toString())
+  assert.equal(rewardProofJson.proof.proof.length, 1)
+  assert.equal(rewardProofCalls, 1)
+
+  const cachedRewardProofResponse = await handleRewardProofRequest(
+    new Request(`http://localhost/api/rewards/proof?account=${testAccount.address}`),
+  )
+  assert.equal(cachedRewardProofResponse.status, 200)
+  assert.equal((await cachedRewardProofResponse.json()).proof.cumulativeAmount, mockSummary.claimableRewards.toString())
+  assert.equal(rewardProofCalls, 1)
+
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes("/proofs/")) {
+      return new Response("service unavailable", { status: 503 })
+    }
+    return mockFetch(url, init)
+  }
+  const failedRewardProofResponse = await handleRewardProofRequest(
+    new Request(`http://localhost/api/rewards/proof?account=${testAccount.address}&refresh=true`),
+  )
+  assert.equal(failedRewardProofResponse.status, 502)
+  assert.equal((await failedRewardProofResponse.json()).code, "reward_proof_failed")
+  assert.equal(
+    await readRewardProof(testAccount.address, undefined, undefined, { bypassCache: true, throwOnFailure: false }),
+    null,
+  )
+  globalThis.fetch = mockFetch
+
   const accountLiveResponse = await handleAccountLiveRequest(
-    new Request(`http://localhost/api/account/live?account=${testAccount.address}`),
+    new Request(`http://localhost/api/account/live?account=${testAccount.address}&refresh=true`),
     { SAFECAFE_MOCK_ACCOUNT_LIVE: "true" },
   )
   assert.equal(accountLiveResponse.status, 200)
   assert.equal(accountLiveResponse.headers.get("cache-control"), "no-store")
+  const accountLiveJson = await accountLiveResponse.json()
+  assert.equal(accountLiveJson.rewardProof.cumulativeAmount, mockSummary.claimableRewards.toString())
+  assert.equal(accountLiveJson.rewards, mockSummary.claimableRewards.toString())
 
   const authenticatedBlockedMethod = await handleEthereumRpcGatewayRequest(
     new Request("http://localhost/api/rpc/ethereum", {
@@ -1559,6 +1740,32 @@ try {
   assert.equal(nonRetryableUpstreamFailureJson.error.data.attempts, 1)
   assert.equal(rpcForbiddenCalls, 1)
 
+  rpcPoolTestHooks.resetCache()
+  const chainListCallsBeforePoolCheck = chainListCalls
+  const chainPool = await rpcUrls({})
+  assert.equal(chainPool.includes("http://cleartext.example"), false)
+  assert.equal(chainPool.includes("wss://ws.example"), false)
+  assert.equal(chainPool.includes("https://chain-rpc.example"), true)
+  assert.equal(chainPool.includes("https://chain-rpc-two.example"), true)
+  assert.equal(chainPool.filter((url) => url === "https://chain-rpc.example").length, 1)
+  await rpcUrls({})
+  assert.equal(chainListCalls - chainListCallsBeforePoolCheck, 1)
+
+  rpcPoolTestHooks.resetCache()
+  let failedChainListCalls = 0
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes("chainid.network")) {
+      failedChainListCalls += 1
+      return new Response("service unavailable", { status: 503 })
+    }
+    return mockFetch(url, init)
+  }
+  const fallbackPool = await rpcUrls({})
+  assert.equal(fallbackPool.includes(DEFAULT_RPC_URLS[0]), true)
+  await rpcUrls({})
+  assert.equal(failedChainListCalls, 1)
+  globalThis.fetch = mockFetch
+
   const authenticatedBlockedTarget = await handleEthereumRpcGatewayRequest(
     new Request("http://localhost/api/rpc/ethereum", {
       method: "POST",
@@ -1602,7 +1809,7 @@ try {
   assert.equal(safeChallenge.signer, testAccount.address)
   assert.equal(safeChallenge.subject, managedSafe)
   assert.equal(safeChallenge.subjectKind, "safe")
-  assert.equal(safeChallenge.message.includes(`Staking Subject: ${managedSafe}`), true)
+  assert.equal(safeChallenge.message.includes(`Staking Account: ${managedSafe}`), true)
   const safeSignature = await testAccount.signMessage({ message: safeChallenge.message })
   const safeVerifyResponse = await handleRpcVerifyRequest(
     new Request("http://localhost/api/auth/verify", {
@@ -1725,6 +1932,42 @@ try {
     { SAFECAFE_AUTH_SECRET: "test-secret", SAFECAFE_RPC_URL: "https://rpc.example" },
   )
   assert.equal((await unsafeNestedSafeExecMulticall.json()).error.data.reason, "eth_call_target_not_allowed")
+
+  const unsafeNestedSafeExecSelector = await handleEthereumRpcGatewayRequest(
+    new Request("http://localhost/api/rpc/ethereum", {
+      method: "POST",
+      headers: { authorization: `Bearer ${safeSession.token}` },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 16,
+        method: "eth_call",
+        params: [
+          {
+            to: managedSafe,
+            data: encodeFunctionData({
+              abi: safeAccountAbi,
+              functionName: "execTransaction",
+              args: [
+                CONTRACTS.safeToken,
+                0n,
+                "0x70a08231",
+                0,
+                0n,
+                0n,
+                0n,
+                `0x${"00".repeat(20)}`,
+                `0x${"00".repeat(20)}`,
+                "0x",
+              ],
+            }),
+          },
+          "latest",
+        ],
+      }),
+    }),
+    { SAFECAFE_AUTH_SECRET: "test-secret", SAFECAFE_RPC_URL: "https://rpc.example" },
+  )
+  assert.equal((await unsafeNestedSafeExecSelector.json()).error.data.reason, "eth_call_target_not_allowed")
 } finally {
   globalThis.fetch = originalFetch
 }

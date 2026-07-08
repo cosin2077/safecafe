@@ -48,6 +48,7 @@ export type DataStatus = {
   liveError: string
   merkleRootMatched: boolean | null
   proofFound: boolean
+  rewardProofStatus: "available" | "missing" | "unavailable"
   rewardsSource: string
   validatorCount: number
   validatorStakeOk: boolean

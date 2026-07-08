@@ -62,7 +62,7 @@ export function createWebTestDriver({ account, baseUrl, chain, page }) {
 
   async function claimRewards() {
     await page.getByRole("button", { exact: true, name: "Rewards" }).click()
-    await page.getByRole("button", { name: "Claim Rewards" }).click()
+    await page.getByRole("button", { name: "Claim to wallet" }).click()
   }
 
   async function claimRewardsAndStake() {
@@ -80,7 +80,17 @@ export function createWebTestDriver({ account, baseUrl, chain, page }) {
   }
 
   async function clickActionMax() {
+    const input = page.locator(".primary-actions-panel .amount-input-wrap input")
     await page.locator(".primary-actions-panel .amount-input-wrap button", { hasText: "MAX" }).click()
+    let currentValue = ""
+    await expectEventually(async () => {
+      currentValue = await input.inputValue()
+      return currentValue.trim().length > 0 && currentValue !== "0"
+    }, "Expected MAX to fill the action amount input.")
+    await expectEventually(async () => {
+      const previewText = await page.locator(".primary-actions-panel .transaction-preview").innerText()
+      return previewText.includes(formatSafeAmountForSummary(toWei(currentValue)))
+    }, "Expected transaction preview to reflect the MAX amount.")
   }
 
   async function expectDashboardActionActive(action) {
@@ -98,6 +108,13 @@ export function createWebTestDriver({ account, baseUrl, chain, page }) {
     const selectText = await page.locator(".primary-actions-panel .custom-select").innerText()
     if (!selectText.includes(expectedText)) {
       throw new Error(`Expected ${action} validator select to include "${expectedText}", got "${selectText}"`)
+    }
+  }
+
+  async function expectCurrentActionSelectDetail(expectedText) {
+    const selectText = await page.locator(".primary-actions-panel .custom-select").innerText()
+    if (!selectText.includes(expectedText)) {
+      throw new Error(`Expected current validator select to include "${expectedText}", got "${selectText}"`)
     }
   }
 
@@ -187,7 +204,21 @@ export function createWebTestDriver({ account, baseUrl, chain, page }) {
   async function expectValidatorStake({ amount, validatorLabel = mockValidators[0].label }) {
     await expectEventually(
       () => validatorState(validatorLabel).userStake === toWei(amount),
-      () => `Expected ${validatorLabel} stake ${amount}, got ${validatorState(validatorLabel).userStake}`,
+      async () =>
+        `Expected ${validatorLabel} stake ${amount}, got ${validatorState(validatorLabel).userStake}. ` +
+        `Submit=${await page
+          .locator(".primary-actions-panel .form-row .primary-button")
+          .first()
+          .innerText()
+          .catch(() => "<unavailable>")}. ` +
+        `Input=${await page
+          .locator(".primary-actions-panel .amount-input-wrap input")
+          .inputValue()
+          .catch(() => "<unavailable>")}. ` +
+        `Notices=${JSON.stringify(await page.evaluate(() => window.__lastSubmitNotices ?? []).catch(() => []))}. ` +
+        `RpcCalls=${stringifyBigints(chain.state.rpcCalls.slice(-12))}. ` +
+        `Txs=${stringifyBigints(await walletTransactions())}. ` +
+        `Pending=${stringifyBigints(chain.state.pendingWithdrawals)}`,
     )
   }
 
@@ -227,6 +258,19 @@ export function createWebTestDriver({ account, baseUrl, chain, page }) {
     )
   }
 
+  async function expectRecentRpcRequestsAuthorized(count) {
+    await expectEventually(
+      () => {
+        const recent = chain.state.rpcRequests.slice(-count)
+        return recent.length >= count && recent.every((request) => request.authorization?.startsWith("Bearer "))
+      },
+      () =>
+        `Expected last ${count} RPC gateway requests to be authorized, got ${stringifyBigints(
+          chain.state.rpcRequests.slice(-count),
+        )}`,
+    )
+  }
+
   async function clearRpcSession() {
     await page.evaluate(() => window.localStorage.removeItem("safecafe:rpc-session"))
   }
@@ -262,12 +306,37 @@ export function createWebTestDriver({ account, baseUrl, chain, page }) {
       .click()
   }
 
+  async function selectValidatorTableAction({ action, validatorLabel }) {
+    await page
+      .getByRole("navigation", { name: "Primary navigation" })
+      .getByRole("button", { name: "Validators" })
+      .click()
+    await selectValidatorAction({ action, validatorLabel })
+    await expectCurrentActionSelectDetail(validatorLabel)
+  }
+
   async function submitPrimaryAction() {
-    await page.locator(".primary-actions-panel .primary-button").click()
+    const action = await page.locator(".primary-actions-panel .action-button.active strong").innerText()
+    const submitLabel = action === "Claim Rewards" ? "Claim to wallet" : action
+    const button = page.locator(".primary-actions-panel .form-row").getByRole("button", { name: submitLabel }).first()
+    const txCountBefore = (await walletTransactions()).length
+    await expectEventually(async () => !(await button.isDisabled()), "Expected primary action button to be enabled.")
+    await button.click()
+    await expectEventually(async () => {
+      const txCountAfter = (await walletTransactions()).length
+      const notices = await page
+        .locator("[data-sonner-toast]")
+        .allInnerTexts()
+        .catch(() => [])
+      await page.evaluate((items) => {
+        window.__lastSubmitNotices = items
+      }, notices)
+      return txCountAfter > txCountBefore || notices.length > 0
+    }, `Expected ${action} submit to produce a wallet transaction or notification.`)
   }
 
   async function openDashboard() {
-    await page.getByRole("button", { name: "Safecafe dashboard" }).click()
+    await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Overview" }).click()
   }
 
   function validatorState(label) {
@@ -286,11 +355,13 @@ export function createWebTestDriver({ account, baseUrl, chain, page }) {
     connectWallet,
     expectCumulativeClaimed,
     expectActionSelectDetail,
+    expectCurrentActionSelectDetail,
     expectDashboardActionActive,
     expectNoVisibleText,
     expectNoPendingWithdrawals,
     expectOverviewValidatorPosition,
     expectPendingWithdrawal,
+    expectRecentRpcRequestsAuthorized,
     expectSafeBalance,
     expectSummary,
     expectTotalStaked,
@@ -306,6 +377,7 @@ export function createWebTestDriver({ account, baseUrl, chain, page }) {
     fillActionAmount,
     refreshLiveData,
     selectDashboardAction,
+    selectValidatorTableAction,
     stake,
     submitPrimaryAction,
     unstake,
@@ -334,6 +406,8 @@ export async function installInternalApiMocks(page, chain) {
     }),
   )
   await page.route("**/api/safes?**", (route) => chain.fulfillSafes(route))
+  await page.route("**/api/validators", (route) => chain.fulfillValidatorsApi(route))
+  await page.route("**/api/rewards/proof?**", (route) => chain.fulfillRewardProof(route))
   await page.route("**/api/rpc/ethereum", (route) => chain.fulfillRpc(route))
   await page.route("**/assets/validator-info.json", (route) => chain.fulfillValidators(route))
   await page.route("**/proofs/**", (route) => chain.fulfillRewardProof(route))
@@ -379,6 +453,10 @@ function decodeKnownTransaction(tx) {
 function toWei(amount) {
   const [whole, fraction = ""] = String(amount).split(".")
   return BigInt(whole || "0") * eth + BigInt(fraction.padEnd(18, "0").slice(0, 18))
+}
+
+function formatSafeAmountForSummary(value) {
+  return (Number(value) / Number(eth)).toFixed(2)
 }
 
 function escapeRegExp(value) {

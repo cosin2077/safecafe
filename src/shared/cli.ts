@@ -143,6 +143,11 @@ export async function sendPlanTransactions(plan: TxPlan, options: SendPlanOption
     })
     options.onSubmitted?.(tx.label, hash)
     const receipt = await publicClient.waitForTransactionReceipt({ hash })
+    assertSuccessfulReceipt(tx.label, receipt)
     options.onConfirmed?.(tx.label, receipt.blockNumber)
   }
+}
+
+export function assertSuccessfulReceipt(label: string, receipt: { status?: string; blockNumber: bigint }) {
+  if (receipt.status !== "success") throw new Error(`Transaction failed: ${label}`)
 }

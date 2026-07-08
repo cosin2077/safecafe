@@ -4,6 +4,7 @@ import { config as loadEnv } from "dotenv"
 import { defineConfig } from "vite"
 import { handleAccountLiveRequest } from "./src/server/accountLive"
 import { handleAgentApiRequest } from "./src/server/agentApi"
+import { handleRewardProofRequest } from "./src/server/rewardsProof"
 import {
   handleEthereumRpcGatewayRequest,
   handleRpcChallengeRequest,
@@ -11,6 +12,7 @@ import {
 } from "./src/server/rpcGateway"
 import { handleSafeDiscoveryRequest } from "./src/server/safeDiscovery"
 import { handleSafePriceRequest } from "./src/server/safePrice"
+import { handleValidatorsRequest } from "./src/server/validators"
 
 loadEnv()
 
@@ -71,6 +73,12 @@ export default defineConfig({
         })
         server.middlewares.use("/api/account/live", async (req, res) => {
           await handleApi(req, res, "/api/account/live", (request) => handleAccountLiveRequest(request, env))
+        })
+        server.middlewares.use("/api/validators", async (req, res) => {
+          await handleApi(req, res, "/api/validators", handleValidatorsRequest)
+        })
+        server.middlewares.use("/api/rewards/proof", async (req, res) => {
+          await handleApi(req, res, "/api/rewards/proof", handleRewardProofRequest)
         })
         server.middlewares.use("/api/price/safe", async (req, res) => {
           await handleApi(req, res, "/api/price/safe", handleSafePriceRequest)

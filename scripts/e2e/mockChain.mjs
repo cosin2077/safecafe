@@ -78,6 +78,7 @@ export function createMockChain(seed = {}) {
     safeThreshold: seed.safeThreshold ?? 1n,
     agentRequests: 0,
     rpcCalls: [],
+    rpcRequests: [],
     stakingAllowance: seed.stakingAllowance ?? 0n,
     txIndex: 0n,
     validators: mockValidators.map((validator) => ({
@@ -110,6 +111,11 @@ export function createMockChain(seed = {}) {
         merkleRoot: state.merkleRoot,
         withdrawDelay: state.withdrawDelay,
       },
+      rewardProof: toRewardProofPayload(),
+      rewards:
+        state.rewardCumulativeAmount > state.cumulativeClaimed
+          ? state.rewardCumulativeAmount - state.cumulativeClaimed
+          : 0n,
       snapshot: {
         cumulativeClaimed: state.cumulativeClaimed,
         nextClaimableWithdrawal: claimable
@@ -200,10 +206,10 @@ export function createMockChain(seed = {}) {
   async function fulfillRewardProof(route) {
     const proof = toRewardProofPayload()
     if (!proof) {
-      await route.fulfill({ status: 404, body: "" })
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ proof: null }) })
       return
     }
-    await route.fulfill({ status: 200, contentType: "application/json", body: stringifyBigints(proof) })
+    await route.fulfill({ status: 200, contentType: "application/json", body: stringifyBigints({ proof }) })
   }
 
   async function fulfillValidators(route) {
@@ -222,7 +228,29 @@ export function createMockChain(seed = {}) {
     })
   }
 
+  async function fulfillValidatorsApi(route) {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: stringifyBigints({
+        validators: state.validators.map((validator) => ({
+          address: validator.address,
+          commission: validator.commission,
+          label: validator.label,
+          participationRate: validator.participationRate,
+          status: validator.status,
+          totalStake: validator.totalStake,
+          userStake: validator.userStake,
+        })),
+      }),
+    })
+  }
+
   async function fulfillRpc(route) {
+    state.rpcRequests.push({
+      authorization: route.request().headers().authorization ?? null,
+      url: route.request().url(),
+    })
     const body = await route.request().postDataJSON()
     const response = Array.isArray(body) ? body.map(handleRpcItem) : handleRpcItem(body)
     await route.fulfill({ status: 200, contentType: "application/json", body: stringifyBigints(response) })
@@ -470,17 +498,6 @@ export function createMockChain(seed = {}) {
           },
         }
         window.localStorage.removeItem("safecafe:wallet-disconnected")
-        window.localStorage.setItem(
-          "safecafe:rpc-session",
-          JSON.stringify({
-            address: injectedAccount,
-            expiresAt: Math.floor(Date.now() / 1000) + 3600,
-            signer: injectedAccount,
-            subject: injectedAccount,
-            subjectKind: "self",
-            token: "mock-rpc-session",
-          }),
-        )
       },
       { account },
     )
@@ -516,7 +533,7 @@ export function createMockChain(seed = {}) {
       gasUsed: "0x5208",
       logs: [],
       logsBloom: `0x${"00".repeat(256)}`,
-      status: "success",
+      status: "0x1",
       to,
       transactionHash: hash,
       transactionIndex: "0x0",
@@ -612,6 +629,7 @@ export function createMockChain(seed = {}) {
     fulfillRewardProof,
     fulfillSafes,
     fulfillRpc,
+    fulfillValidatorsApi,
     fulfillValidators,
     installWallet,
     state,

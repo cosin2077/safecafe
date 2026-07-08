@@ -1,7 +1,6 @@
 import { createPublicClient, fallback, getAddress, http, isAddress } from "viem"
 import {
   ethereumMainnet,
-  fetchValidators,
   mockSummary,
   mockValidators,
   readAccountSnapshot,
@@ -9,9 +8,11 @@ import {
   readValidatorPositions,
 } from "../protocol"
 import { bigintReplacer } from "../shared"
+import { readRewardProof } from "./rewardsProof"
 import { rpcUrls } from "./rpcUpstream"
 import { createRequestContext, logServerEvent, truncateMessage, withRequestHeaders } from "./serverDiagnostics"
 import type { RpcGatewayEnv } from "./serverEnv"
+import { readValidatorMetadata } from "./validators"
 
 const mockMerkleRoot = `0x${"11".repeat(32)}` as const
 const accountLiveCacheTtlMs = 5 * 60 * 1000
@@ -48,13 +49,24 @@ export async function handleAccountLiveRequest(request: Request, env: RpcGateway
       chain: ethereumMainnet,
       transport: fallback((await rpcUrls(env)).map((rpcUrl) => http(rpcUrl, { timeout: 8_000 }))),
     })
-    const [snapshot, health, validatorMetadata] = await Promise.all([
+    const [snapshot, health, validatorMetadata, rewardProofResult] = await Promise.all([
       readAccountSnapshot(client, normalizedAccount),
       readHealth(client),
-      fetchValidators(undefined, { fallback: false }),
+      readValidatorMetadata(request, context, { fallback: true }),
+      readRewardProof(normalizedAccount, request, context, {
+        bypassCache,
+        throwOnFailure: true,
+      })
+        .then((proof) => ({ proof, status: proof ? "available" : "missing" }))
+        .catch(() => ({ proof: null, status: "unavailable" })),
     ])
     const validatorsWithPositions = await readValidatorPositions(client, normalizedAccount, validatorMetadata)
-    const body = JSON.stringify({ health, snapshot, validatorsWithPositions }, bigintReplacer)
+    const rewardProof = rewardProofResult.proof
+    const rewards = calculateClaimableRewards(rewardProof, snapshot.cumulativeClaimed)
+    const body = JSON.stringify(
+      { health, rewardProof, rewardProofStatus: rewardProofResult.status, rewards, snapshot, validatorsWithPositions },
+      bigintReplacer,
+    )
     accountLiveCache.set(cacheKey, { body, expiresAt: Date.now() + accountLiveCacheTtlMs })
     return jsonString(body, 200, "no-store", "MISS", context)
   } catch (error) {
@@ -83,6 +95,13 @@ function mockAccountLiveBody() {
       withdrawDelay: mockSummary.withdrawDelay,
       merkleRoot: mockMerkleRoot,
     },
+    rewardProof: {
+      cumulativeAmount: mockSummary.claimableRewards.toString(),
+      merkleRoot: mockMerkleRoot,
+      proof: [],
+    },
+    rewardProofStatus: "available",
+    rewards: mockSummary.claimableRewards,
     snapshot: {
       safeBalance: mockSummary.safeBalance,
       totalStaked: mockSummary.totalStaked,
@@ -102,6 +121,12 @@ function mockAccountLiveBody() {
     },
     validatorsWithPositions: mockValidators,
   }
+}
+
+function calculateClaimableRewards(proof: Awaited<ReturnType<typeof readRewardProof>>, cumulativeClaimed: bigint) {
+  if (!proof) return 0n
+  const cumulativeAmount = BigInt(proof.cumulativeAmount)
+  return cumulativeAmount > cumulativeClaimed ? cumulativeAmount - cumulativeClaimed : 0n
 }
 
 function json(payload: unknown, status = 200, context?: ReturnType<typeof createRequestContext>, errorCode?: string) {

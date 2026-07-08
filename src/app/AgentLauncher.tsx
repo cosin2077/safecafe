@@ -40,10 +40,12 @@ export function AgentLauncher(props: AgentLauncherProps) {
     startY: number
   } | null>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
+  const positionRef = useRef(position)
 
   const clampAndSetPosition = useCallback((next: { x: number; y: number }, persist = true) => {
     const clamped = clampPosition(next)
-    setPosition(clamped)
+    positionRef.current = clamped
+    setPosition((current) => (current.x === clamped.x && current.y === clamped.y ? current : clamped))
     if (persist) {
       writeStorageJson(appStorageKeys.agentLauncherPosition, clamped)
     }
@@ -52,7 +54,7 @@ export function AgentLauncher(props: AgentLauncherProps) {
   useEffect(() => {
     const onResize = () => {
       setIsMobile(window.innerWidth < 720)
-      clampAndSetPosition(position)
+      clampAndSetPosition(positionRef.current, false)
     }
     window.addEventListener("resize", onResize)
     window.addEventListener("orientationchange", onResize)
@@ -60,7 +62,7 @@ export function AgentLauncher(props: AgentLauncherProps) {
       window.removeEventListener("resize", onResize)
       window.removeEventListener("orientationchange", onResize)
     }
-  }, [clampAndSetPosition, position])
+  }, [clampAndSetPosition])
 
   useEffect(() => {
     if (isOpen) {

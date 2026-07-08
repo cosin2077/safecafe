@@ -48,6 +48,18 @@ const allowedSafeSubjectCallSelectors = new Set([
   "0xaffed0e0", // nonce()
   "0xd8d11f78", // getTransactionHash(...)
 ])
+const allowedNestedSelectorsByTarget = new Map<string, Set<string>>([
+  [CONTRACTS.safeToken.toLowerCase(), new Set(["0x095ea7b3"])], // approve(address,uint256)
+  [
+    CONTRACTS.staking.toLowerCase(),
+    new Set([
+      "0xadc9772e", // stake(address,uint256)
+      "0xc8393ba9", // initiateWithdrawal(address,uint256)
+      "0x6e66d84a", // claimWithdrawal()
+    ]),
+  ],
+  [CONTRACTS.merkleDrop.toLowerCase(), new Set(["0x1d7d4ebc"])], // claim(address,uint256,bytes32,bytes32[])
+])
 const safeExecTransactionSelector = "0x6a761202"
 
 export async function handleRpcChallengeRequest(request: Request, env: RpcGatewayEnv): Promise<Response> {
@@ -302,10 +314,16 @@ function isAllowedSafeExecCall(data: unknown) {
     if (value !== 0n) return false
     if (!isAddress(to)) return false
     if (typeof nestedData !== "string" || nestedData.length > 20_000) return false
-    return allowedCallTargets.has(to.toLowerCase())
+    return isAllowedNestedSafeCall(to, nestedData)
   } catch {
     return false
   }
+}
+
+function isAllowedNestedSafeCall(to: string, data: string) {
+  const selectors = allowedNestedSelectorsByTarget.get(to.toLowerCase())
+  if (!selectors) return false
+  return selectors.has(data.slice(0, 10).toLowerCase())
 }
 
 async function readJsonBody(

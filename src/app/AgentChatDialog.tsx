@@ -102,6 +102,7 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
   const requestSeqRef = useRef(0)
   const contextKeyRef = useRef("")
   const streamAbortRef = useRef<AbortController | null>(null)
+  const executedToolCallsRef = useRef(new Set<string>())
   const dialogRef = useRef<HTMLElement>(null)
   const sessionMenuRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
@@ -224,6 +225,7 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
     contextKeyRef.current = currentContextKey
     if (activeSession.draftKey && activeSession.draftKey === currentContextKey) return
     requestSeqRef.current += 1
+    executedToolCallsRef.current.clear()
     streamAbortRef.current?.abort()
     streamAbortRef.current = null
     setIsDrafting(false)
@@ -503,6 +505,7 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
 
   function createNewSession() {
     requestSeqRef.current += 1
+    executedToolCallsRef.current.clear()
     resetBusy()
     const session = createSession(props.t.agentNewSession)
     setSessions((current) => [session, ...current].slice(0, 5))
@@ -512,6 +515,7 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
 
   function clearSession() {
     requestSeqRef.current += 1
+    executedToolCallsRef.current.clear()
     resetBusy()
     updateActiveSession((session) => ({
       ...session,
@@ -528,6 +532,7 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
 
   function clearAllSessions() {
     requestSeqRef.current += 1
+    executedToolCallsRef.current.clear()
     resetBusy()
     const session = createSession(props.t.agentNewSession)
     setSessions([session])
@@ -545,6 +550,7 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
       return
     }
     requestSeqRef.current += 1
+    executedToolCallsRef.current.clear()
     resetBusy()
     setActiveSessionId(sessionId)
     setIsSessionMenuOpen(false)
@@ -559,6 +565,7 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
 
   function stopAgentRun() {
     requestSeqRef.current += 1
+    executedToolCallsRef.current.clear()
     streamAbortRef.current?.abort()
     streamAbortRef.current = null
     resetBusy()
@@ -639,6 +646,9 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
   ): Promise<string | null> | null {
     if (event.status !== "completed") return null
     if (!isRefreshLiveDataTool(event.name, event.data)) return null
+    const toolKey = `${requestSeqRef.current}:${sessionId}:${event.callId}`
+    if (executedToolCallsRef.current.has(toolKey)) return null
+    executedToolCallsRef.current.add(toolKey)
     return refreshLiveDataForAgent(sessionId, event.callId)
   }
 

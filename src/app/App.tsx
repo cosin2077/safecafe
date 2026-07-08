@@ -2,12 +2,15 @@ import {
   ArrowDownToLine,
   ChevronDown,
   Database,
+  ExternalLink,
   Gift,
   Home,
   Languages,
   Menu,
   RefreshCw,
   Settings,
+  ShieldCheck,
+  TrendingUp,
   Users,
   Wallet,
   X,
@@ -19,14 +22,15 @@ import {
   type AccountSnapshot,
   buildSafeExecTransaction,
   CHAIN_ID,
+  CONTRACTS,
   combineTxPlans,
   compactAddress,
   createSafenetPublicClient,
   EXPLORER_BASE_URL,
-  fetchRewardProof,
-  fetchValidators,
   findValidator,
+  formatSafe,
   formatSafeInput,
+  formatUsdFromSafe,
   isTxPlanForAccount,
   planClaimRewards,
   planClaimWithdrawal,
@@ -45,6 +49,16 @@ import { AgentLauncher } from "./AgentLauncher"
 import { DetailModal } from "./DetailModal"
 import { readableSimulationError, safeParsedAmount, stringifyBigInts, translateTxLabel } from "./formatters"
 import { detectLocale, getMessages, isLocale, type Locale, localeOptions } from "./i18n"
+import {
+  accountLiveCacheFreshMs,
+  type LiveReadResult,
+  parseLiveReadResult,
+  type RewardProof,
+  type RewardProofStatus,
+  readCachedLiveData,
+  toBigInt,
+  writeCachedLiveData,
+} from "./liveDataCache"
 import {
   appStorageKeys,
   readStorageAddress,
@@ -83,24 +97,14 @@ type WalletStatus = "idle" | "restoring" | "connecting" | "connected"
 type DashboardAction = Extract<Action, "stake" | "unstake" | "claim-rewards">
 type SubmittingAction = Action | "claim-rewards-and-stake" | null
 type SimulateTxPlanOptions = { requireAuth?: boolean }
+type ExecuteActionOptions = { amount?: string; validator?: Address }
 type SubmitPlanOptions = {
   alreadySubmitting?: boolean
   requireAuth?: boolean
   skipValidation?: boolean
 }
-type LiveReadResult = {
-  health: {
-    blockNumber: bigint
-    merkleRoot: `0x${string}`
-    withdrawDelay: bigint
-  }
-  snapshot: AccountSnapshot
-  validatorsWithPositions: ValidatorInfo[]
-}
-type RefreshedLiveAccountData = LiveReadResult & {
-  rewardProof: Awaited<ReturnType<typeof fetchRewardProof>> | null
-  rewards: bigint
-}
+type RefreshedLiveAccountData = LiveReadResult
+type LiveDataMeta = { fetchedAt: number; source: "cache" | "live" }
 
 function navFromPath(pathname: string): NavItem {
   const normalized = pathname.replace(/\/+$/, "") || "/"
@@ -112,6 +116,65 @@ function actionFromPath(pathname: string): Action {
   const normalized = pathname.replace(/\/+$/, "") || "/"
   if (normalized === "/unstake") return "unstake"
   return "stake"
+}
+
+function buildActionPreview({
+  action,
+  amount,
+  mode,
+  selectedValidator,
+  stakingAllowance,
+  summary,
+  t,
+}: {
+  action: Action
+  amount: string
+  mode?: "claim-and-restake"
+  selectedValidator: ValidatorInfo
+  stakingAllowance: bigint
+  summary: AccountSummary
+  t: ReturnType<typeof getMessages>
+}) {
+  const parsedAmount = safeParsedAmount(amount)
+  const actionAmount =
+    action === "claim-rewards"
+      ? summary.claimableRewards
+      : parsedAmount === null
+        ? action === "stake"
+          ? summary.safeBalance
+          : selectedValidator.userStake
+        : parsedAmount
+  const isRestake = mode === "claim-and-restake"
+  const needsApproval = (action === "stake" || isRestake) && actionAmount > 0n && stakingAllowance < actionAmount
+  const expectedOutcome = isRestake
+    ? `${t.claimAndRestake}: ${formatSafe(actionAmount)} SAFE -> ${selectedValidator.label}`
+    : action === "stake"
+      ? `${t.stakeAction} ${formatSafe(actionAmount)} SAFE`
+      : action === "unstake"
+        ? `${t.unstakeAction} ${formatSafe(actionAmount)} SAFE`
+        : `${t.claimToWallet}: ${formatSafe(summary.claimableRewards)} SAFE`
+  return {
+    amount: actionAmount,
+    authorization: needsApproval ? `${t.approveNeeded}: ${formatSafe(actionAmount)} SAFE` : t.sufficient,
+    expectedOutcome,
+    gas: t.connectToEstimateGas,
+    risk:
+      action === "unstake"
+        ? t.warningWithdrawalQueue
+        : isRestake
+          ? t.restakePreview
+          : action === "claim-rewards"
+            ? t.rewardsProofRequired
+            : t.slashingRiskValue,
+    steps: isRestake
+      ? [t.rewardsProofSource, t.claimToWallet, t.allowance, t.stakeAction]
+      : action === "stake"
+        ? [t.correctNetwork, t.allowance, t.walletConfirmation]
+        : action === "unstake"
+          ? [t.correctNetwork, t.walletConfirmation, t.unlocking]
+          : [t.rewardsProofSource, t.walletConfirmation, t.claimed],
+    validatorCommission: `${selectedValidator.commission.toFixed(2)}%`,
+  }
 }
 
 function dashboardActionFromPath(pathname: string): DashboardAction {
@@ -134,8 +197,9 @@ const validatorSortOptions = [
   "yourStake",
 ] as const satisfies readonly ValidatorSort[]
 const toastDurationMs = readToastDurationMs(import.meta.env.VITE_TOAST_DURATION_MS)
-const mockRewardProofEnabled = import.meta.env.VITE_MOCK_REWARD_PROOF === "true"
-const mockRewardMerkleRoot = `0x${"11".repeat(32)}` as const
+const safeMetadataFailureRetryMs = 60_000
+const safeMetadataSuccessRetryMs = 10 * 60 * 1000
+const estimatedApyPercent = 4.8
 type ToastTone = "success" | "warning" | "info"
 const navMeta: Record<NavItem, { icon: typeof Home }> = {
   dashboard: { icon: Home },
@@ -183,11 +247,13 @@ export function App() {
   const [liveBlock, setLiveBlock] = useState<bigint | null>(null)
   const [liveError, setLiveError] = useState("")
   const [isReadingLive, setIsReadingLive] = useState(false)
+  const [liveDataMeta, setLiveDataMeta] = useState<LiveDataMeta | null>(null)
   const [walletStatus, setWalletStatus] = useState<WalletStatus>("idle")
   const [isLoadingValidators, setIsLoadingValidators] = useState(true)
   const [validators, setValidators] = useState<ValidatorInfo[]>([])
   const [validatorLoadError, setValidatorLoadError] = useState("")
-  const [rewardProof, setRewardProof] = useState<Awaited<ReturnType<typeof fetchRewardProof>> | null>(null)
+  const [rewardProof, setRewardProof] = useState<RewardProof | null>(null)
+  const [rewardProofStatus, setRewardProofStatus] = useState<RewardProofStatus>("missing")
   const [liveMerkleRoot, setLiveMerkleRoot] = useState<string | null>(null)
   const [chainId, setChainId] = useState<number | null>(null)
   const [rpcAuthToken, setRpcAuthToken] = useState<string | null>(null)
@@ -217,7 +283,7 @@ export function App() {
   const mobileLanguageButtonRef = useRef<HTMLButtonElement | null>(null)
   const mobileLanguageMenuRef = useRef<HTMLDivElement | null>(null)
   const liveReadRequestId = useRef(0)
-  const safeMetadataLookupRef = useRef(new Set<string>())
+  const safeMetadataLookupRef = useRef(new Map<string, number>())
   const refreshLiveReadsRef = useRef<
     ((target?: Address | null, options?: { forceRefresh?: boolean }) => Promise<RefreshedLiveAccountData | null>) | null
   >(null)
@@ -226,6 +292,52 @@ export function App() {
     [validator, validators],
   )
   const hasLiveAccountData = Boolean(subjectAccount && liveSnapshot)
+  const liveDataStatusText = useMemo(() => {
+    if (isReadingLive && !liveSnapshot) return t.liveDataReading
+    if (isReadingLive && liveDataMeta?.source === "cache") return t.liveDataRefreshingCached
+    if (isReadingLive && liveSnapshot) return t.liveDataRefreshing
+    if (liveDataMeta?.source === "cache") return t.liveDataShowingCached
+    if (liveSnapshot) return t.liveLoaded
+    return ""
+  }, [isReadingLive, liveDataMeta?.source, liveSnapshot, t])
+  const liveDataUpdatedText = useMemo(() => {
+    if (!liveDataMeta) return ""
+    return `${t.liveDataUpdatedAt}: ${formatLiveDataTimestamp(liveDataMeta.fetchedAt, locale)}`
+  }, [liveDataMeta, locale, t.liveDataUpdatedAt])
+  const summaryDescription = useMemo(() => {
+    if (walletStatus === "restoring") return t.walletRestoring
+    if (isReadingLive && !liveSnapshot && subjectAccount) return t.liveDataReading
+    if (liveSnapshot && subjectAccount) return `${t.liveDataFor} ${compactAddress(subjectAccount)}.`
+    return t.connectToBegin
+  }, [
+    isReadingLive,
+    liveSnapshot,
+    subjectAccount,
+    t.connectToBegin,
+    t.liveDataFor,
+    t.liveDataReading,
+    t.walletRestoring,
+    walletStatus,
+  ])
+  const pageHeader = useMemo(() => {
+    if (activeNav === "withdrawals") return { description: t.withdrawalsPageDescription, title: t.withdrawals }
+    if (activeNav === "rewards") return { description: t.rewardsPageDescription, title: t.rewards }
+    if (activeNav === "validators") return { description: t.validatorsPageDescription, title: t.stakingDistribution }
+    if (activeNav === "settings") return { description: t.settingsPageDescription, title: t.docsTitle }
+    return { description: summaryDescription, title: t.accountSummary }
+  }, [
+    activeNav,
+    summaryDescription,
+    t.accountSummary,
+    t.docsTitle,
+    t.rewards,
+    t.rewardsPageDescription,
+    t.settingsPageDescription,
+    t.stakingDistribution,
+    t.validatorsPageDescription,
+    t.withdrawals,
+    t.withdrawalsPageDescription,
+  ])
   const visibleValidators = useMemo(() => {
     const query = validatorQuery.trim().toLowerCase()
     const filtered = validators.filter((item) => {
@@ -271,7 +383,14 @@ export function App() {
       liveError,
       merkleRootMatched,
       proofFound: Boolean(rewardProof),
-      rewardsSource: rewardProof ? t.proofLoaded : liveSnapshot ? t.proofMissing : t.notChecked,
+      rewardProofStatus,
+      rewardsSource: liveSnapshot
+        ? rewardProofStatus === "unavailable"
+          ? t.proofUnavailable
+          : rewardProof
+            ? t.proofLoaded
+            : t.proofMissing
+        : t.notChecked,
       validatorCount: validators.length,
       validatorStakeOk: validators.length > 0 && validatorPoolTotal > 0n && !validatorStakeError,
       validatorStakeStatus:
@@ -285,6 +404,7 @@ export function App() {
     liveMerkleRoot,
     liveSnapshot,
     rewardProof,
+    rewardProofStatus,
     t,
     validatorPoolTotal,
     validatorStakeError,
@@ -293,6 +413,43 @@ export function App() {
   const displaySummary = hasLiveAccountData ? summary : emptySummary
   const displayValidators = visibleValidators
   const displaySafePriceUsd = safePrice.usd
+  const activeValidatorCount = useMemo(() => validators.filter((item) => item.status === "active").length, [validators])
+  const estimatedAnnualRewards = hasLiveAccountData
+    ? (summary.totalStaked * BigInt(Math.round(estimatedApyPercent * 100))) / 10000n
+    : 0n
+  const decisionMetrics = {
+    activeValidatorCount,
+    apyPercent: estimatedApyPercent,
+    estimatedAnnualRewards,
+    protocolTvlUsd: formatUsdFromSafe(validatorPoolTotal, displaySafePriceUsd),
+    validatorPoolTotal,
+    withdrawDelay: summary.withdrawDelay || liveSnapshot?.withdrawDelay || 0n,
+  }
+  const dashboardActionPreview = buildActionPreview({
+    action: dashboardAction,
+    amount,
+    selectedValidator,
+    summary,
+    stakingAllowance: liveSnapshot?.stakingAllowance ?? 0n,
+    t,
+  })
+  const rewardsActionPreview = buildActionPreview({
+    action: "claim-rewards",
+    amount,
+    selectedValidator,
+    summary,
+    stakingAllowance: liveSnapshot?.stakingAllowance ?? 0n,
+    t,
+  })
+  const rewardsRestakePreview = buildActionPreview({
+    action: "claim-rewards",
+    amount,
+    mode: "claim-and-restake",
+    selectedValidator,
+    summary,
+    stakingAllowance: liveSnapshot?.stakingAllowance ?? 0n,
+    t,
+  })
   const selectedSafeHasMetadata = useMemo(() => {
     if (!stakingAccount || walletIdentity.subjectKind !== "safe") return false
     const selectedSafe = discoveredSafes.find((safe) => isSameAddress(safe.address, stakingAccount))
@@ -436,8 +593,10 @@ export function App() {
     setLiveSnapshot(null)
     setLiveRewards(null)
     setRewardProof(null)
+    setRewardProofStatus("missing")
     setLiveMerkleRoot(null)
     setLiveBlock(null)
+    setLiveDataMeta(null)
     setLiveError("")
     setTxPlan(null)
     setTxProgress("")
@@ -465,8 +624,8 @@ export function App() {
   useEffect(() => {
     setIsLoadingValidators(true)
     setValidatorLoadError("")
-    fetchValidators(undefined, { fallback: false })
-      .then((items) => {
+    fetchValidatorMetadata()
+      .then((items: ValidatorInfo[]) => {
         setValidatorStakeError("")
         setValidators((current) => {
           const merged = mergeValidatorMetadata(items, current)
@@ -478,7 +637,7 @@ export function App() {
           return merged
         })
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : t.validatorInfoFailed
         setValidatorLoadError(message)
         toast(message, "warning")
@@ -488,6 +647,18 @@ export function App() {
       })
   }, [t.validatorInfoFailed, toast])
 
+  const applyLiveReadResult = useCallback((data: LiveReadResult, meta: LiveDataMeta) => {
+    setLiveSnapshot(data.snapshot)
+    setLiveBlock(data.health.blockNumber)
+    setLiveMerkleRoot(data.health.merkleRoot)
+    setValidatorLoadError("")
+    setValidators(data.validatorsWithPositions)
+    setRewardProof(data.rewardProof)
+    setRewardProofStatus(data.rewardProofStatus)
+    setLiveRewards(data.rewards)
+    setLiveDataMeta(meta)
+  }, [])
+
   const refreshLiveReads = useCallback(
     async (target = subjectAccount, options: { forceRefresh?: boolean } = {}) => {
       if (!target) {
@@ -496,57 +667,34 @@ export function App() {
       }
       const requestId = liveReadRequestId.current + 1
       liveReadRequestId.current = requestId
-      setIsReadingLive(true)
       setLiveError("")
+      const cached = options.forceRefresh ? null : readCachedLiveData(target)
+      if (cached) {
+        applyLiveReadResult(cached.data, { fetchedAt: cached.fetchedAt, source: "cache" })
+        if (Date.now() - cached.fetchedAt <= accountLiveCacheFreshMs) {
+          setIsReadingLive(false)
+          return cached.data
+        }
+      }
+      setIsReadingLive(true)
       try {
-        const { health, snapshot, validatorsWithPositions } = await readLiveData(target, options)
+        const nextLiveData = await readLiveData(target, options)
         if (liveReadRequestId.current !== requestId) return null
-        setLiveSnapshot(snapshot)
-        setLiveBlock(health.blockNumber)
-        setLiveMerkleRoot(health.merkleRoot)
-        setValidatorLoadError("")
-        setValidators(validatorsWithPositions)
-
-        let nextRewardProof: Awaited<ReturnType<typeof fetchRewardProof>> | null = null
-        let nextRewards = 0n
-        try {
-          const proof = mockRewardProofEnabled
-            ? {
-                cumulativeAmount: "95000000000000000000",
-                merkleRoot: mockRewardMerkleRoot,
-                proof: [],
-              }
-            : await fetchRewardProof(target)
-          if (liveReadRequestId.current !== requestId) return null
-          nextRewardProof = proof
-          setRewardProof(proof)
-          const cumulativeAmount = proof ? BigInt(proof.cumulativeAmount) : 0n
-          nextRewards =
-            cumulativeAmount > snapshot.cumulativeClaimed ? cumulativeAmount - snapshot.cumulativeClaimed : 0n
-          setLiveRewards(nextRewards)
-        } catch {
-          if (liveReadRequestId.current !== requestId) return null
-          setRewardProof(null)
-          setLiveRewards(0n)
-        }
-        return {
-          health,
-          rewardProof: nextRewardProof,
-          rewards: nextRewards,
-          snapshot,
-          validatorsWithPositions,
-        }
+        const fetchedAt = writeCachedLiveData(target, nextLiveData)
+        applyLiveReadResult(nextLiveData, { fetchedAt, source: "live" })
+        return nextLiveData
       } catch (error) {
         if (liveReadRequestId.current !== requestId) return null
         const message = error instanceof Error ? error.message : t.liveDataFailed
-        setLiveError(message)
-        toast(message, "warning")
-        return null
+        const fallbackMessage = cached ? `${t.liveDataRefreshFailedCached} ${message}` : message
+        setLiveError(fallbackMessage)
+        toast(fallbackMessage, "warning")
+        return cached?.data ?? null
       } finally {
         if (liveReadRequestId.current === requestId) setIsReadingLive(false)
       }
     },
-    [subjectAccount, t.connectToLoad, t.liveDataFailed, toast],
+    [applyLiveReadResult, subjectAccount, t.connectToLoad, t.liveDataFailed, t.liveDataRefreshFailedCached, toast],
   )
 
   useEffect(() => {
@@ -557,16 +705,21 @@ export function App() {
     if (!stakingAccount || walletIdentity.subjectKind !== "safe") return
     const normalizedStakingAccount = stakingAccount.toLowerCase()
     if (selectedSafeHasMetadata) return
-    if (safeMetadataLookupRef.current.has(normalizedStakingAccount)) return
-    safeMetadataLookupRef.current.add(normalizedStakingAccount)
+    const retryAfter = safeMetadataLookupRef.current.get(normalizedStakingAccount)
+    if (retryAfter && retryAfter > Date.now()) return
     const controller = new AbortController()
     fetchSafeMetadata(stakingAccount, controller.signal)
       .then((safe) => {
         if (controller.signal.aborted) return
+        safeMetadataLookupRef.current.set(
+          normalizedStakingAccount,
+          Date.now() + (hasSafeMultisigMetadata(safe) ? safeMetadataSuccessRetryMs : safeMetadataFailureRetryMs),
+        )
         setDiscoveredSafes((current) => mergeDiscoveredSafes(current, [safe]))
       })
       .catch(() => {
         if (controller.signal.aborted) return
+        safeMetadataLookupRef.current.set(normalizedStakingAccount, Date.now() + safeMetadataFailureRetryMs)
         setDiscoveredSafes((current) => mergeDiscoveredSafes(current, [emptyDiscoveredSafe(stakingAccount)]))
       })
     return () => controller.abort()
@@ -843,28 +996,42 @@ export function App() {
     return session.token
   }
 
-  function createTxPlan(nextAction = action): TxPlan | null {
-    if (!subjectAccount || !liveSnapshot) return null
+  function createTxPlan(
+    nextAction = action,
+    options: ExecuteActionOptions & { liveData?: RefreshedLiveAccountData | null } = {},
+  ): TxPlan | null {
+    const snapshot = options.liveData?.snapshot ?? liveSnapshot
+    const proof = options.liveData?.rewardProof ?? rewardProof
+    const rewards = options.liveData?.rewards ?? liveRewards ?? 0n
+    const merkleRoot = options.liveData?.health.merkleRoot ?? liveMerkleRoot
+    if (!subjectAccount || !snapshot) return null
+    const targetValidator = options.validator ?? validator
+    const targetAmount = options.amount ?? amount
     if (nextAction === "stake") {
-      return planStake({ validator, amount, account: subjectAccount, allowance: liveSnapshot.stakingAllowance })
+      return planStake({
+        validator: targetValidator,
+        amount: targetAmount,
+        account: subjectAccount,
+        allowance: snapshot.stakingAllowance,
+      })
     }
     if (nextAction === "unstake") {
-      return planUnstake({ validator, amount, account: subjectAccount })
+      return planUnstake({ validator: targetValidator, amount: targetAmount, account: subjectAccount })
     }
     if (nextAction === "claim-withdrawal") {
       return planClaimWithdrawal(subjectAccount)
     }
     if (nextAction === "claim-rewards") {
-      if (!rewardProof?.proof) throw new Error(t.noProof)
-      if (liveMerkleRoot && rewardProof.merkleRoot.toLowerCase() !== liveMerkleRoot.toLowerCase()) {
+      if (!proof?.proof) throw new Error(t.noProof)
+      if (merkleRoot && proof.merkleRoot.toLowerCase() !== merkleRoot.toLowerCase()) {
         throw new Error(t.merkleMismatch)
       }
-      if ((liveRewards ?? 0n) <= 0n) throw new Error(t.noProof)
+      if (rewards <= 0n) throw new Error(t.noProof)
       return planClaimRewards({
         account: subjectAccount,
-        cumulativeAmount: BigInt(rewardProof.cumulativeAmount),
-        merkleRoot: rewardProof.merkleRoot,
-        proof: rewardProof.proof,
+        cumulativeAmount: BigInt(proof.cumulativeAmount),
+        merkleRoot: proof.merkleRoot,
+        proof: proof.proof,
       })
     }
     return null
@@ -910,7 +1077,7 @@ export function App() {
     })
   }
 
-  async function executeAction(nextAction = action) {
+  async function executeAction(nextAction = action, options: ExecuteActionOptions = {}) {
     if (!account) {
       await connectWallet()
       return
@@ -928,9 +1095,12 @@ export function App() {
     try {
       await ensureMainnet()
       if (!subjectAccount || !liveSnapshot) throw new Error(t.connectToPlan)
-      const validation = validateAction(nextAction)
+      const refreshed =
+        nextAction === "claim-rewards" ? await refreshLiveReads(subjectAccount, { forceRefresh: true }) : null
+      if (nextAction === "claim-rewards" && !refreshed) throw new Error(t.liveDataFailed)
+      const validation = validateAction(nextAction, { ...options, liveData: refreshed })
       if (validation) throw new Error(validation)
-      const nextPlan = createTxPlan(nextAction)
+      const nextPlan = createTxPlan(nextAction, { ...options, liveData: refreshed })
       if (!nextPlan) throw new Error(t.transactionFailed)
       const simulatedPlan = await simulateTxPlan(nextPlan, { requireAuth: true })
       if (simulatedPlan.simulation?.status === "failed") throw new Error(simulatedPlan.simulation.message)
@@ -963,6 +1133,7 @@ export function App() {
     try {
       await ensureMainnet()
       const refreshed = await refreshLiveReads(subjectAccount, { forceRefresh: true })
+      if (!refreshed) throw new Error(t.liveDataFailed)
       const nextPlan = createClaimRewardsAndStakePlan(targetValidatorAddress, refreshed)
       const simulatedPlan = await simulateTxPlan(nextPlan, { requireAuth: true })
       if (simulatedPlan.simulation?.status === "failed") throw new Error(simulatedPlan.simulation.message)
@@ -1161,21 +1332,30 @@ export function App() {
     return confirmedTxCount
   }
 
-  function validateAction(targetAction = action): string | null {
-    if (!subjectAccount || !liveSnapshot) return t.connectToPlan
+  function validateAction(
+    targetAction = action,
+    options: ExecuteActionOptions & { liveData?: RefreshedLiveAccountData | null } = {},
+  ): string | null {
+    const snapshot = options.liveData?.snapshot ?? liveSnapshot
+    const proof = options.liveData?.rewardProof ?? rewardProof
+    const rewards = options.liveData?.rewards ?? liveRewards ?? 0n
+    const merkleRoot = options.liveData?.health.merkleRoot ?? liveMerkleRoot
+    if (!subjectAccount || !snapshot) return t.connectToPlan
     if (chainId !== null && chainId !== CHAIN_ID) return t.wrongNetwork
     if (targetAction === "stake" || targetAction === "unstake") {
-      const parsedAmount = safeParsedAmount(amount)
+      const targetValidator = options.validator
+        ? (findValidator(validators, options.validator) ?? selectedValidator)
+        : selectedValidator
+      const parsedAmount = safeParsedAmount(options.amount ?? amount)
       if (parsedAmount === null) return t.invalidAmount
-      if (selectedValidator.status !== "active") return t.inactiveValidator
-      if (targetAction === "stake" && liveSnapshot.safeBalance < parsedAmount) return t.insufficientSafeBalance
-      if (targetAction === "unstake" && selectedValidator.userStake < parsedAmount) return t.insufficientValidatorStake
+      if (targetAction === "stake" && targetValidator.status !== "active") return t.inactiveValidator
+      if (targetAction === "stake" && snapshot.safeBalance < parsedAmount) return t.insufficientSafeBalance
+      if (targetAction === "unstake" && targetValidator.userStake < parsedAmount) return t.insufficientValidatorStake
     }
     if (targetAction === "claim-withdrawal" && summary.claimableWithdrawals <= 0n) return t.noClaimableWithdrawal
     if (targetAction === "claim-rewards") {
-      if (!rewardProof?.proof || (liveRewards ?? 0n) <= 0n) return t.noProof
-      if (liveMerkleRoot && rewardProof.merkleRoot.toLowerCase() !== liveMerkleRoot.toLowerCase())
-        return t.merkleMismatch
+      if (!proof?.proof || rewards <= 0n) return t.noProof
+      if (merkleRoot && proof.merkleRoot.toLowerCase() !== merkleRoot.toLowerCase()) return t.merkleMismatch
     }
     return null
   }
@@ -1385,6 +1565,13 @@ export function App() {
             </button>
           </div>
 
+          <button
+            type="button"
+            className={`topbar-menu-backdrop ${isMenuOpen ? "open" : ""}`}
+            aria-label={t.menu}
+            onClick={() => setIsMenuOpen(false)}
+          />
+
           <div className={`topbar-menu ${isMenuOpen ? "open" : ""}`}>
             <nav className="nav-tabs" aria-label={t.primaryNavigation}>
               {navItems.map((item) => {
@@ -1410,91 +1597,102 @@ export function App() {
       </header>
 
       <main className="page">
-        <div className="dashboard-topline">
-          <h1>{t.appTitle}</h1>
+        <div className="page-topline">
+          <div className="page-title-block">
+            <h1>{pageHeader.title}</h1>
+            <p>{pageHeader.description}</p>
+          </div>
           {renderTopbarStatus("desktop")}
-        </div>
-        <section className="summary-card enter">
-          <div className="section-heading">
-            <div>
-              <h1>{t.accountSummary}</h1>
-              <p>
-                {walletStatus === "restoring"
-                  ? t.walletRestoring
-                  : liveSnapshot && subjectAccount
-                    ? `${t.liveDataFor} ${compactAddress(subjectAccount)}.`
-                    : t.connectToBegin}
-              </p>
-            </div>
-            <div className="summary-refresh-control">
-              {account ? (
+          <div className="page-meta-row">
+            {account && subjectAccount && (isReadingLive || liveDataMeta) && (
+              <div
+                className={`live-data-state ${isReadingLive ? "loading" : ""} ${
+                  liveDataMeta?.source === "cache" ? "cached" : "fresh"
+                }`}
+                aria-live="polite"
+              >
+                <span className="live-data-state-main">
+                  <strong>{liveDataStatusText}</strong>
+                </span>
+                {liveDataUpdatedText && <small>{liveDataUpdatedText}</small>}
                 <button
                   type="button"
-                  className="live-refresh-button"
+                  className="live-data-refresh-button"
                   disabled={isReadingLive || walletBusy}
                   onClick={forceRefreshLiveReads}
                   aria-label={t.forceRefreshLive}
-                  title={t.forceRefreshLive}
                 >
-                  <RefreshCw size={16} className={isReadingLive ? "spin-icon" : ""} />
-                  <span>
-                    <strong>{isReadingLive ? t.reading : t.refreshLive}</strong>
-                    <small>{t.forceRefreshLiveHint}</small>
-                  </span>
+                  <RefreshCw size={13} className={isReadingLive ? "spin-icon" : ""} />
                 </button>
-              ) : (
-                <button type="button" className="live-refresh-button" disabled={walletBusy} onClick={refreshOrConnect}>
-                  <Wallet size={16} />
-                  <span>
-                    <strong>{walletBusy ? t.reading : t.connectWallet}</strong>
-                    <small>{t.connectWalletHint}</small>
-                  </span>
-                </button>
-              )}
-            </div>
-          </div>
-          {liveError && <p className="warning">{liveError}</p>}
-          {!account && (
-            <div className="connect-panel">
-              <Wallet size={20} />
-              <div>
-                <strong>{walletStatus === "restoring" ? t.walletRestoring : t.connectWallet}</strong>
-                <small>{walletBusy ? t.reading : t.connectWalletHint}</small>
               </div>
-              <button type="button" className="primary-button" disabled={walletBusy} onClick={connectWallet}>
-                {walletStatus === "connecting" ? t.walletConnecting : t.connectWallet}
+            )}
+            <section className="summary-trust-strip" aria-label={t.trustVerification}>
+              <span className="summary-trust-network">
+                <ShieldCheck size={15} />
+                <strong>{t.chainIdentity}</strong>
+              </span>
+              <button type="button" onClick={() => openExplorer(CONTRACTS.staking)}>
+                {t.stakingContractShort} <ExternalLink size={12} />
               </button>
-            </div>
-          )}
-          <div className="summary-grid">
-            <Metric
-              icon={<Database />}
-              label={t.safeBalance}
-              value={hasLiveAccountData ? displaySummary.safeBalance : null}
-              unavailable={t.connectWallet}
-              safePriceUsd={displaySafePriceUsd}
-            />
-            <Metric
-              icon={<Wallet />}
-              label={t.totalStaked}
-              value={hasLiveAccountData ? displaySummary.totalStaked : null}
-              unavailable={t.connectWallet}
-              safePriceUsd={displaySafePriceUsd}
-            />
-            <Metric
-              icon={<Gift />}
-              label={t.claimableRewards}
-              value={hasLiveAccountData ? displaySummary.claimableRewards : null}
-              unavailable={t.connectWallet}
-              safePriceUsd={displaySafePriceUsd}
-            />
+            </section>
           </div>
-        </section>
+        </div>
+        {activeNav === "dashboard" && (
+          <section className="summary-card enter">
+            {liveError && <p className="warning">{liveError}</p>}
+            {!account && (
+              <div className="connect-panel">
+                <Wallet size={20} />
+                <div>
+                  <strong>{walletStatus === "restoring" ? t.walletRestoring : t.connectWallet}</strong>
+                  <small>{walletBusy ? t.reading : t.connectWalletHint}</small>
+                </div>
+                <button type="button" className="primary-button" disabled={walletBusy} onClick={connectWallet}>
+                  {walletStatus === "connecting" ? t.walletConnecting : t.connectWallet}
+                </button>
+              </div>
+            )}
+            <div className="summary-grid">
+              <Metric
+                icon={<Database />}
+                label={t.safeBalance}
+                value={hasLiveAccountData ? displaySummary.safeBalance : null}
+                unavailable={t.notConnected}
+                safePriceUsd={displaySafePriceUsd}
+              />
+              <Metric
+                icon={<Wallet />}
+                label={t.totalStaked}
+                value={hasLiveAccountData ? displaySummary.totalStaked : null}
+                unavailable={t.notConnected}
+                safePriceUsd={displaySafePriceUsd}
+              />
+              <Metric
+                icon={<Gift />}
+                label={t.claimableRewards}
+                value={hasLiveAccountData ? displaySummary.claimableRewards : null}
+                unavailable={t.notConnected}
+                safePriceUsd={displaySafePriceUsd}
+              />
+              <div className="metric metric-rate">
+                <span className="metric-icon">
+                  <TrendingUp />
+                </span>
+                <span>
+                  <small>{t.currentApy}</small>
+                  <strong>{estimatedApyPercent.toFixed(2)}%</strong>
+                  <em>{t.estimatedAnnualRewards}</em>
+                </span>
+              </div>
+            </div>
+          </section>
+        )}
 
         {activeNav === "dashboard" && (
           <DashboardView
             t={t}
             action={dashboardAction}
+            actionPreview={dashboardActionPreview}
             amount={amount}
             accountReady={hasLiveAccountData}
             connectedAccount={connectedAccount}
@@ -1502,6 +1700,7 @@ export function App() {
             executeAction={executeAction}
             isLoadingValidators={isLoadingValidators}
             isSubmitting={isSubmitting}
+            restakePreview={rewardsRestakePreview}
             submittingAction={submittingAction}
             modal={modal}
             onConnect={refreshOrConnect}
@@ -1522,6 +1721,7 @@ export function App() {
             stakingAllowance={liveSnapshot?.stakingAllowance ?? 0n}
             summary={displaySummary}
             safePriceUsd={displaySafePriceUsd}
+            decisionMetrics={decisionMetrics}
             validatorPoolTotal={validatorPoolTotal}
           />
         )}
@@ -1565,8 +1765,12 @@ export function App() {
         {activeNav === "rewards" && (
           <RewardsView
             t={t}
+            actionPreview={rewardsActionPreview}
+            executeClaimRewardsAndStake={executeClaimRewardsAndStake}
             executeAction={executeAction}
             isSubmitting={isSubmitting}
+            restakePreview={rewardsRestakePreview}
+            selectedValidator={selectedValidator}
             submittingAction={submittingAction}
             selectAction={selectAction}
             summary={displaySummary}
@@ -1583,9 +1787,10 @@ export function App() {
             selectAction={selectAction}
             summary={displaySummary}
             txProgress={txProgress}
+            liveSnapshot={liveSnapshot}
           />
         )}
-        {activeNav === "settings" && <DocsView t={t} />}
+        {activeNav === "settings" && <DocsView t={t} copyText={copyText} openExplorer={openExplorer} />}
       </main>
 
       <footer className="footer">
@@ -1695,10 +1900,22 @@ async function readLiveDataError(response: Response) {
   }
 }
 
+function formatLiveDataTimestamp(fetchedAt: number, locale: Locale) {
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(new Date(fetchedAt))
+  } catch {
+    return new Date(fetchedAt).toLocaleTimeString()
+  }
+}
+
 async function fetchOwnedSafesWithMetadata(owner: Address, signal?: AbortSignal): Promise<DiscoveredSafe[]> {
   const params = new URLSearchParams({ owner })
   const response = await fetch(`/api/safes?${params.toString()}`, { cache: "no-store", signal })
-  if (!response.ok) throw new Error(await readSafeDiscoveryError(response))
+  if (!response.ok) throw new Error(await readApiError(response, "Safe discovery failed"))
   const data = (await response.json()) as { safes?: unknown }
   if (!Array.isArray(data.safes)) return []
   return data.safes.map(parseDiscoveredSafe).filter((safe): safe is DiscoveredSafe => Boolean(safe))
@@ -1707,9 +1924,36 @@ async function fetchOwnedSafesWithMetadata(owner: Address, signal?: AbortSignal)
 async function fetchSafeMetadata(address: Address, signal?: AbortSignal): Promise<DiscoveredSafe> {
   const params = new URLSearchParams({ safe: address })
   const response = await fetch(`/api/safes?${params.toString()}`, { cache: "no-store", signal })
-  if (!response.ok) throw new Error(await readSafeDiscoveryError(response))
+  if (!response.ok) throw new Error(await readApiError(response, "Safe discovery failed"))
   const data = (await response.json()) as { safe?: unknown }
   return parseDiscoveredSafe(data.safe) ?? emptyDiscoveredSafe(address)
+}
+
+async function fetchValidatorMetadata(): Promise<ValidatorInfo[]> {
+  const response = await fetch("/api/validators", { cache: "no-store" })
+  if (!response.ok) throw new Error(await readApiError(response, "Validator metadata failed"))
+  const data = (await response.json()) as { validators?: unknown }
+  if (!Array.isArray(data.validators)) return []
+  return data.validators.map(parseValidatorInfo).filter((validator): validator is ValidatorInfo => Boolean(validator))
+}
+
+function parseValidatorInfo(value: unknown): ValidatorInfo | null {
+  if (!value || typeof value !== "object") return null
+  const record = value as Partial<ValidatorInfo>
+  const address = normalizeAddress(record.address)
+  if (!address || typeof record.label !== "string") return null
+  return {
+    address,
+    label: record.label,
+    status: record.status === "inactive" ? "inactive" : "active",
+    commission: typeof record.commission === "number" && Number.isFinite(record.commission) ? record.commission : 0,
+    participationRate:
+      typeof record.participationRate === "number" && Number.isFinite(record.participationRate)
+        ? record.participationRate
+        : 0,
+    totalStake: toBigInt(record.totalStake),
+    userStake: toBigInt(record.userStake),
+  }
 }
 
 function parseDiscoveredSafe(value: unknown): DiscoveredSafe | null {
@@ -1725,15 +1969,15 @@ function safeNumberOrNull(value: unknown) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null
 }
 
-async function readSafeDiscoveryError(response: Response) {
+async function readApiError(response: Response, fallback: string) {
   try {
     const body = (await response.json()) as { code?: unknown; error?: unknown; requestId?: unknown }
-    const message = typeof body.error === "string" ? body.error : `Safe discovery failed: ${response.status}`
+    const message = typeof body.error === "string" ? body.error : `${fallback}: ${response.status}`
     const code = typeof body.code === "string" ? body.code : ""
     const requestId = typeof body.requestId === "string" ? body.requestId : response.headers.get("x-request-id")
     return [message, code ? `(${code})` : "", requestId ? `request ${requestId}` : ""].filter(Boolean).join(" ")
   } catch {
-    return `Safe discovery failed: ${response.status}`
+    return `${fallback}: ${response.status}`
   }
 }
 
@@ -1778,55 +2022,6 @@ function isSameAddress(a: Address, b: Address) {
   return a.toLowerCase() === b.toLowerCase()
 }
 
-function parseLiveReadResult(value: unknown): LiveReadResult {
-  const data = value as {
-    health?: { blockNumber?: string; merkleRoot?: string; withdrawDelay?: string }
-    snapshot?: {
-      cumulativeClaimed?: string
-      nextClaimableWithdrawal?: { amount?: string; claimableAt?: string }
-      pendingWithdrawals?: Array<{ amount?: string; claimableAt?: string }>
-      safeBalance?: string
-      stakingAllowance?: string
-      totalStaked?: string
-      withdrawDelay?: string
-    }
-    validatorsWithPositions?: Array<ValidatorInfo & { totalStake?: string; userStake?: string }>
-  }
-  if (!data.health || !data.snapshot || !Array.isArray(data.validatorsWithPositions)) {
-    throw new Error("Account live API returned an invalid payload.")
-  }
-  if (typeof data.health.merkleRoot !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(data.health.merkleRoot)) {
-    throw new Error("Account live API returned an invalid merkle root.")
-  }
-  return {
-    health: {
-      blockNumber: toBigInt(data.health.blockNumber),
-      merkleRoot: data.health.merkleRoot as `0x${string}`,
-      withdrawDelay: toBigInt(data.health.withdrawDelay),
-    },
-    snapshot: {
-      cumulativeClaimed: toBigInt(data.snapshot.cumulativeClaimed),
-      nextClaimableWithdrawal: {
-        amount: toBigInt(data.snapshot.nextClaimableWithdrawal?.amount),
-        claimableAt: toBigInt(data.snapshot.nextClaimableWithdrawal?.claimableAt),
-      },
-      pendingWithdrawals: (data.snapshot.pendingWithdrawals ?? []).map((item) => ({
-        amount: toBigInt(item.amount),
-        claimableAt: toBigInt(item.claimableAt),
-      })),
-      safeBalance: toBigInt(data.snapshot.safeBalance),
-      stakingAllowance: toBigInt(data.snapshot.stakingAllowance),
-      totalStaked: toBigInt(data.snapshot.totalStaked),
-      withdrawDelay: toBigInt(data.snapshot.withdrawDelay),
-    },
-    validatorsWithPositions: data.validatorsWithPositions.map((validator) => ({
-      ...validator,
-      totalStake: toBigInt(validator.totalStake),
-      userStake: toBigInt(validator.userStake),
-    })),
-  }
-}
-
 function summaryFromSnapshot(snapshot: AccountSnapshot, rewards: bigint): AccountSummary {
   const pendingWithdrawals = snapshot.pendingWithdrawals.reduce((sum, item) => sum + item.amount, 0n)
   const now = BigInt(Math.floor(Date.now() / 1000))
@@ -1839,13 +2034,6 @@ function summaryFromSnapshot(snapshot: AccountSnapshot, rewards: bigint): Accoun
     claimableRewards: rewards,
     withdrawDelay: snapshot.withdrawDelay,
   }
-}
-
-function toBigInt(value: unknown) {
-  if (typeof value === "bigint") return value
-  if (typeof value === "number" && Number.isSafeInteger(value)) return BigInt(value)
-  if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value)
-  return 0n
 }
 
 function mergeValidatorMetadata(metadata: ValidatorInfo[], current: ValidatorInfo[]): ValidatorInfo[] {
