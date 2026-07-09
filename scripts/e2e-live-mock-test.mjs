@@ -97,7 +97,7 @@ async function runSafeDiscoveryFlow(page) {
   await walletDialog.getByRole("button", { name: "Use Safe multisig" }).click()
   await page.getByText("Choose or enter a valid Safe address that is different from the connected wallet.").waitFor()
   await walletDialog.getByRole("button", { name: "Safe multisig address" }).click()
-  await page.getByRole("option", { name: /Safe multisig address 1/ }).click()
+  await page.getByRole("option", { name: /0x111111.*111111/ }).click()
   const stakingSubjectRow = walletDialog.locator(".address-row", { hasText: "Staking account" })
   await stakingSubjectRow.getByText(/Safe - 1\/1 multisig/).waitFor()
   await stakingSubjectRow.getByText("0x11111111...11111111").waitFor()

@@ -1,5 +1,6 @@
 import type { Address } from "viem"
 import type { TxPlanAction, ValidatorInfo } from "../protocol"
+import type { PlanExecutionSummary } from "./planExecution"
 
 export const navItems = ["dashboard", "withdrawals", "rewards", "validators", "settings"] as const
 
@@ -53,6 +54,10 @@ export type DataStatus = {
   validatorCount: number
   validatorStakeOk: boolean
   validatorStakeStatus: string
+}
+
+export type ActionExecutionSummary = PlanExecutionSummary & {
+  action: TxPlanAction | "claim-rewards-and-stake"
 }
 
 export type Modal =

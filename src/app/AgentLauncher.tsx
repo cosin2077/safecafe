@@ -5,6 +5,7 @@ import { AgentChatDialog } from "./AgentChatDialog"
 import { AgentLogo } from "./AgentLogo"
 import type { MessageBundle } from "./i18n"
 import { appStorageKeys, readStorageJson, writeStorageJson } from "./persistence"
+import type { ActionExecutionSummary } from "./types"
 import { Tooltip } from "./ui"
 
 const launcherSize = 56
@@ -15,6 +16,7 @@ const draggable = readDraggableEnabled(import.meta.env.VITE_AGENT_LAUNCHER_DRAGG
 export type AgentLauncherProps = {
   t: MessageBundle
   context: AgentContext
+  executionState: ActionExecutionSummary | null
   isSubmitting: boolean
   txProgress: string
   userLlmConfig: UserLlmConfig | null
@@ -151,6 +153,7 @@ export function AgentLauncher(props: AgentLauncherProps) {
           isClosing={!isOpen}
           anchor={isMobile ? null : position}
           context={props.context}
+          executionState={props.executionState}
           isSubmitting={props.isSubmitting}
           txProgress={props.txProgress}
           userLlmConfig={props.userLlmConfig}

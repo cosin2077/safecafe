@@ -2,7 +2,9 @@ import { AlertTriangle, Check, CheckCircle2, ChevronDown, Clock3, Copy, External
 import { type KeyboardEvent, type MouseEvent, type ReactNode, useEffect, useId, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { formatSafe, formatUsdFromSafe } from "../protocol"
+import { translateTxLabel } from "./formatters"
 import type { MessageBundle } from "./i18n"
+import type { PlanExecutionSummary } from "./planExecution"
 
 export function FullPanel({
   children,
@@ -103,6 +105,46 @@ export function Progress({ value, variant = "blue" }: { value: number; variant?:
 export function StatusBadge({ status, t }: { status: string; t: MessageBundle }) {
   const label = status === "active" ? t.active : status === "inactive" ? t.inactive : status
   return <span className={`status-badge ${status}`}>{label}</span>
+}
+
+export function ExecutionSummaryCard({ summary, t }: { summary: PlanExecutionSummary; t: MessageBundle }) {
+  const title =
+    summary.status === "completed"
+      ? t.executionCompletedTitle
+      : summary.userRejected
+        ? t.executionInterruptedTitle
+        : summary.status === "partial"
+          ? t.executionPartialTitle
+          : t.transactionFailed
+  const body =
+    summary.status === "completed"
+      ? summary.skippedCount > 0
+        ? t.executionSkippedBody.replace("{count}", summary.skippedCount.toString())
+        : t.executionCompletedBody
+      : summary.userRejected
+        ? t.executionInterruptedBody
+        : summary.errorMessage || t.executionReviewBody
+  return (
+    <section className={`execution-summary-card ${summary.status}${summary.userRejected ? " user-rejected" : ""}`}>
+      <div className="execution-summary-heading">
+        <span>
+          <strong>{title}</strong>
+          <small>{body}</small>
+        </span>
+        <em>
+          {summary.completedCount + summary.skippedCount}/{summary.steps.length}
+        </em>
+      </div>
+      <div className="execution-summary-steps">
+        {summary.steps.map((step) => (
+          <span key={step.id} className={`execution-summary-step ${step.status}`}>
+            <span className="execution-summary-step-dot" aria-hidden="true" />
+            <span>{translateTxLabel(step.label, t)}</span>
+          </span>
+        ))}
+      </div>
+    </section>
+  )
 }
 
 export function ConfirmDialog(props: {
@@ -379,6 +421,117 @@ export function CustomSelect(props: {
   )
 }
 
+type CopyActionHandler = (value: string) => boolean | Promise<boolean> | Promise<void> | void
+
+export function CopyActionButton({
+  children,
+  className = "",
+  copiedLabel,
+  label,
+  onCopy,
+  size = 14,
+  stopPropagation = false,
+  value,
+}: {
+  children?: ReactNode
+  className?: string
+  copiedLabel?: string
+  label: string
+  onCopy: CopyActionHandler
+  size?: number
+  stopPropagation?: boolean
+  value: string
+}) {
+  const [copied, setCopied] = useState(false)
+  const copiedTimerRef = useRef<number | null>(null)
+
+  useEffect(
+    () => () => {
+      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+    },
+    [],
+  )
+
+  async function handleClick(event: MouseEvent<HTMLButtonElement>) {
+    if (stopPropagation) event.stopPropagation()
+    const result = await onCopy(value)
+    if (result === false) return
+    setCopied(true)
+    if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+    copiedTimerRef.current = window.setTimeout(() => {
+      setCopied(false)
+      copiedTimerRef.current = null
+    }, 1300)
+  }
+
+  return (
+    <Tooltip label={copied ? (copiedLabel ?? label) : label}>
+      <button
+        type="button"
+        className={`inline-action-button ${copied ? "copied" : ""} ${className}`.trim()}
+        onClick={(event) => void handleClick(event)}
+        aria-label={label}
+      >
+        {copied ? <Check size={size} /> : <Copy size={size} />}
+        {children}
+      </button>
+    </Tooltip>
+  )
+}
+
+export function ExternalActionButton({
+  children,
+  className = "",
+  href,
+  label,
+  onOpen,
+  size = 14,
+  stopPropagation = false,
+}: {
+  children?: ReactNode
+  className?: string
+  href?: string
+  label: string
+  onOpen?: () => void
+  size?: number
+  stopPropagation?: boolean
+}) {
+  const icon = <ExternalLink size={size} />
+  if (href) {
+    return (
+      <Tooltip label={label}>
+        <a
+          className={`inline-action-button ${className}`.trim()}
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={label}
+        >
+          {icon}
+          {children}
+        </a>
+      </Tooltip>
+    )
+  }
+
+  return (
+    <Tooltip label={label}>
+      <button
+        type="button"
+        className={`inline-action-button ${className}`.trim()}
+        onClick={(event) => {
+          if (stopPropagation) event.stopPropagation()
+          onOpen?.()
+        }}
+        aria-label={label}
+      >
+        {icon}
+        {children}
+      </button>
+    </Tooltip>
+  )
+}
+
 export function Tooltip({
   className = "",
   label,
@@ -523,11 +676,7 @@ export function KeyValue({ label, value, link }: { label: string; value: string;
     <div className="key-row">
       <span>{label}</span>
       <strong>{value}</strong>
-      {link && (
-        <a href={link} target="_blank" rel="noreferrer" aria-label={label}>
-          <ExternalLink size={14} />
-        </a>
-      )}
+      {link && <ExternalActionButton className="key-row-action" href={link} label={label} />}
     </div>
   )
 }

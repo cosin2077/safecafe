@@ -1,4 +1,4 @@
-import { ArrowUpRight, Copy, FileJson, GitCommit, Globe2, Link2, ShieldCheck, X } from "lucide-react"
+import { ArrowUpRight, FileJson, GitCommit, Globe2, Link2, ShieldCheck, X } from "lucide-react"
 import { type ReactNode, useEffect, useRef, useState } from "react"
 import type { Address } from "viem"
 import { CHAIN_ID, compactAddress, formatSafe } from "../protocol"
@@ -11,9 +11,10 @@ import {
   type ReleaseTrustState,
   safeStakingEnsName,
   safeStakingEthLimoUrl,
+  sourceRepositoryUrl,
 } from "./releaseTrust"
 import type { DataStatus, DiscoveredSafe, Modal } from "./types"
-import { ChecklistRow, CustomSelect, KeyValue, Tooltip } from "./ui"
+import { ChecklistRow, CopyActionButton, CustomSelect, ExternalActionButton, KeyValue } from "./ui"
 
 export function DetailModal(props: {
   account: Address | null
@@ -22,7 +23,7 @@ export function DetailModal(props: {
   discoveredSafes: DiscoveredSafe[]
   safeDiscoveryError: string
   safeDiscoveryStatus: "failed" | "idle" | "loading" | "ready"
-  copyText: (value: string) => Promise<void>
+  copyText: (value: string) => Promise<boolean>
   dataStatus: DataStatus
   disconnectWallet: () => void
   modal: NonNullable<Modal>
@@ -106,6 +107,8 @@ export function DetailModal(props: {
             label={t.trustGitCommit}
             value={releaseRecord ? compactHash(releaseRecord.commit) : t.notChecked}
             detail={releaseRecord?.dirty ? t.trustDirtyBuild : t.trustCleanBuild}
+            link={releaseRecord ? `${sourceRepositoryUrl}/commit/${releaseRecord.commit}` : undefined}
+            linkLabel={`${t.openExplorer} ${t.trustGitCommit}`}
           />
         </section>
 
@@ -120,25 +123,39 @@ export function DetailModal(props: {
         </section>
 
         <div className="trust-actions">
-          <a className="soft-button" href={safeStakingEthLimoUrl} target="_blank" rel="noreferrer">
-            <ArrowUpRight size={15} />
+          <ExternalActionButton
+            className="soft-button action-text-button"
+            href={safeStakingEthLimoUrl}
+            label={t.trustOpenEns}
+          >
             {t.trustOpenEns}
-          </a>
+          </ExternalActionButton>
           {releaseRecord?.ipfs?.gateways.dweb && (
-            <a className="soft-button" href={releaseRecord.ipfs.gateways.dweb} target="_blank" rel="noreferrer">
-              <ArrowUpRight size={15} />
+            <ExternalActionButton
+              className="soft-button action-text-button"
+              href={releaseRecord.ipfs.gateways.dweb}
+              label={t.trustOpenGateway}
+            >
               {t.trustOpenGateway}
-            </a>
+            </ExternalActionButton>
           )}
-          <a className="soft-button" href={manifestUrl} target="_blank" rel="noreferrer">
-            <FileJson size={15} />
+          <ExternalActionButton
+            className="soft-button action-text-button"
+            href={manifestUrl}
+            label={t.trustOpenManifest}
+          >
             {t.trustOpenManifest}
-          </a>
+          </ExternalActionButton>
           {releaseRecord?.ipfs?.uri && (
-            <button type="button" className="soft-button" onClick={() => props.copyText(releaseRecord.ipfs?.uri ?? "")}>
-              <Copy size={15} />
+            <CopyActionButton
+              className="soft-button action-text-button"
+              copiedLabel={t.copied}
+              label={t.trustCopyUri}
+              onCopy={props.copyText}
+              value={releaseRecord.ipfs.uri}
+            >
               {t.trustCopyUri}
-            </button>
+            </CopyActionButton>
           )}
         </div>
 
@@ -157,14 +174,22 @@ export function DetailModal(props: {
         <KeyValue label={t.totalSafeStaked} value={`${formatSafe(modal.validator.totalStake)} SAFE`} />
         <KeyValue label={t.yourStake} value={`${formatSafe(modal.validator.userStake)} SAFE`} />
         <div className="modal-actions">
-          <button type="button" className="soft-button" onClick={() => props.copyText(modal.validator.address)}>
-            <Copy size={15} />
+          <CopyActionButton
+            className="soft-button action-text-button"
+            copiedLabel={t.copied}
+            label={t.copy}
+            onCopy={props.copyText}
+            value={modal.validator.address}
+          >
             {t.copy}
-          </button>
-          <button type="button" className="soft-button" onClick={() => props.openExplorer(modal.validator.address)}>
-            <ArrowUpRight size={15} />
+          </CopyActionButton>
+          <ExternalActionButton
+            className="soft-button action-text-button"
+            label={t.openExplorer}
+            onOpen={() => props.openExplorer(modal.validator.address)}
+          >
             {t.openExplorer}
-          </button>
+          </ExternalActionButton>
         </div>
       </>
     )
@@ -254,11 +279,16 @@ export function DetailModal(props: {
               setSubjectInput(value)
               props.onRefreshSubject(value)
             }}
-            options={props.discoveredSafes.map((safe, index) => ({
+            optionAction={{
+              copiedLabel: t.copied,
+              label: t.copy,
+              onClick: (value) => props.copyText(value),
+            }}
+            options={props.discoveredSafes.map((safe) => ({
               value: safe.address,
-              label: safe.address,
+              label: compactAddress(safe.address, 8, 6),
               badge: formatSafeMultisigBadge(safe, t) ?? undefined,
-              detail: `${t.managedSafeAddress} ${index + 1}`,
+              detail: t.managedSafeAddress,
             }))}
           />
           <small className="modal-field-note">
@@ -403,13 +433,33 @@ function trustStatusSummary(
   return [t.trustStatusReview, t.trustVerifiedNotice, "review"]
 }
 
-function TrustEvidenceStep(props: { detail: string; icon: ReactNode; label: string; value: string }) {
+function TrustEvidenceStep(props: {
+  detail: string
+  icon: ReactNode
+  label: string
+  link?: string
+  linkLabel?: string
+  value: string
+}) {
   return (
     <div className="trust-evidence-step">
       <span className="trust-evidence-icon">{props.icon}</span>
       <div>
         <small>{props.label}</small>
-        <strong>{props.value}</strong>
+        {props.link ? (
+          <a
+            className="trust-evidence-link"
+            href={props.link}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={props.linkLabel ?? props.label}
+          >
+            <strong>{props.value}</strong>
+            <ArrowUpRight size={14} />
+          </a>
+        ) : (
+          <strong>{props.value}</strong>
+        )}
         <em>{props.detail}</em>
       </div>
     </div>
@@ -419,7 +469,7 @@ function TrustEvidenceStep(props: { detail: string; icon: ReactNode; label: stri
 function AddressRow(props: {
   address: Address | null
   copyLabel: string
-  copyText: (value: string) => Promise<void>
+  copyText: (value: string) => Promise<boolean>
   fallback?: string
   label: string
   openExplorer: (address: Address) => void
@@ -431,34 +481,22 @@ function AddressRow(props: {
     <div className="address-row">
       <span>{props.label}</span>
       {address ? (
-        <>
-          <strong>
-            {compactAddress(address, 10, 8)}
-            {props.suffix ? <em>{props.suffix}</em> : null}
-          </strong>
-          <div className="address-row-actions">
-            <Tooltip label={props.copyLabel}>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => props.copyText(address)}
-                aria-label={`${props.copyLabel} ${props.label}`}
-              >
-                <Copy size={15} />
-              </button>
-            </Tooltip>
-            <Tooltip label={props.openLabel}>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => props.openExplorer(address)}
-                aria-label={`${props.openLabel} ${props.label}`}
-              >
-                <ArrowUpRight size={15} />
-              </button>
-            </Tooltip>
-          </div>
-        </>
+        <strong className="address-row-value">
+          <span className="address-row-address">{compactAddress(address, 10, 8)}</span>
+          <CopyActionButton
+            className="address-inline-button"
+            copiedLabel={props.copyLabel}
+            label={`${props.copyLabel} ${props.label}`}
+            onCopy={props.copyText}
+            value={address}
+          />
+          {props.suffix ? <em>{props.suffix}</em> : null}
+          <ExternalActionButton
+            className="address-inline-button"
+            label={`${props.openLabel} ${props.label}`}
+            onOpen={() => props.openExplorer(address)}
+          />
+        </strong>
       ) : (
         <strong>{props.fallback ?? ""}</strong>
       )}

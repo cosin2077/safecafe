@@ -46,7 +46,8 @@ import { isAgentAuthRequired } from "./agentAuthConfig"
 import { translateTxLabel, translateTxWarning } from "./formatters"
 import type { MessageBundle } from "./i18n"
 import { appStorageKeys, readStorageText, removeStorageValue, writeStorageJson, writeStorageText } from "./persistence"
-import { ButtonBusyLabel, ConfirmDialog, Tooltip } from "./ui"
+import type { ActionExecutionSummary } from "./types"
+import { ButtonBusyLabel, ConfirmDialog, ExecutionSummaryCard, Tooltip } from "./ui"
 
 type AgentChatMessage = {
   id: string
@@ -91,6 +92,7 @@ export type AgentChatDialogProps = {
   isClosing?: boolean
   anchor: { x: number; y: number } | null
   context: AgentContext
+  executionState: ActionExecutionSummary | null
   isSubmitting: boolean
   txProgress: string
   userLlmConfig: UserLlmConfig | null
@@ -719,7 +721,10 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
   async function submitActivePlan() {
     const plan = activeSession.executablePlan
     if (!plan || !canUsePlan || props.isSubmitting) return
-    await props.onSubmitPlan(plan)
+    await props.onSubmitPlan({
+      ...plan,
+      action: "agent-plan",
+    })
   }
 
   async function regenerateActivePlan() {
@@ -904,6 +909,7 @@ export function AgentChatDialog(props: AgentChatDialogProps) {
             warnings={warnings}
             warningsAccepted={activeSession.warningsAccepted}
             canUsePlan={canUsePlan}
+            executionState={props.executionState}
             isSubmitting={props.isSubmitting}
             txProgress={props.txProgress}
             safeSubject={props.context.subjectKind === "safe"}
@@ -1193,6 +1199,7 @@ function AgentPlanCard(props: {
   warnings: string[]
   warningsAccepted: boolean
   canUsePlan: boolean
+  executionState: ActionExecutionSummary | null
   isSubmitting: boolean
   txProgress: string
   safeSubject: boolean
@@ -1256,6 +1263,9 @@ function AgentPlanCard(props: {
           )}
           <small>{props.t.agentWalletConfirmations}</small>
         </div>
+      )}
+      {!props.isSubmitting && props.executionState?.action === "agent-plan" && (
+        <ExecutionSummaryCard summary={props.executionState} t={props.t} />
       )}
       {props.warnings.length > 0 && (
         <label className="agent-warning-ack">

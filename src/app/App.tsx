@@ -2,7 +2,6 @@ import {
   ArrowDownToLine,
   ChevronDown,
   Database,
-  ExternalLink,
   Gift,
   Home,
   Languages,
@@ -45,6 +44,7 @@ import {
   resolveSafeExecutionMode,
   SAFE_PRICE_CACHE_MS,
   type TxPlan,
+  type TxPlanAction,
   toSafeTransactionPayload,
   type ValidatorInfo,
 } from "../protocol"
@@ -80,6 +80,7 @@ import {
   writeStorageText,
   writeStoredWalletSubject,
 } from "./persistence"
+import { isUserRejectedRequest, reconcileTxPlanForExecution } from "./planExecution"
 import { readCachedSafePrice, writeCachedSafePrice } from "./priceCache"
 import {
   compactCid,
@@ -92,6 +93,7 @@ import { fetchSafeUsdPrice } from "./safePriceApi"
 import {
   type AccountSummary,
   type Action,
+  type ActionExecutionSummary,
   type DataStatus,
   type DiscoveredSafe,
   defaultValidator,
@@ -101,7 +103,7 @@ import {
   navItems,
   type SafePriceState,
 } from "./types"
-import { FullPanel, Metric } from "./ui"
+import { ExternalActionButton, FullPanel, Metric } from "./ui"
 import { compareBigintDesc, findPreferredRestakeValidator } from "./validatorSelection"
 import { DashboardView, DocsView, RewardsView, ValidatorTable, ValidatorToolbar, WithdrawalsView } from "./views"
 import { createWalletIdentity, isSelfSubject, normalizeAddress } from "./walletIdentity"
@@ -122,6 +124,7 @@ type SubmittingAction = Action | "claim-rewards-and-stake" | null
 type SimulateTxPlanOptions = { requireAuth?: boolean }
 type ExecuteActionOptions = { amount?: string; validator?: Address }
 type SubmitPlanOptions = {
+  actionKey?: TxPlanAction | "claim-rewards-and-stake"
   alreadySubmitting?: boolean
   requireAuth?: boolean
   skipValidation?: boolean
@@ -200,6 +203,42 @@ function buildActionPreview({
   }
 }
 
+function createExecutionState(
+  actionKey: TxPlanAction | "claim-rewards-and-stake",
+  title: string,
+  steps: ActionExecutionSummary["steps"],
+  options: {
+    currentLabel?: string | null
+    errorMessage?: string
+    status?: "completed" | "failed" | "partial"
+    userRejected?: boolean
+  } = {},
+): ActionExecutionSummary {
+  const completedCount = steps.filter((step) => step.status === "done").length
+  const skippedCount = steps.filter((step) => step.status === "skipped").length
+  const pendingCount = steps.filter((step) => step.status === "pending").length
+  const derivedStatus =
+    options.status ??
+    (pendingCount === 0 && !options.errorMessage
+      ? "completed"
+      : completedCount > 0 || skippedCount > 0
+        ? "partial"
+        : "failed")
+  return {
+    action: actionKey,
+    actionKey,
+    completedCount,
+    currentLabel: options.currentLabel ?? null,
+    errorMessage: options.errorMessage ?? "",
+    pendingCount,
+    skippedCount,
+    status: derivedStatus,
+    steps,
+    title,
+    userRejected: options.userRejected === true,
+  }
+}
+
 function dashboardActionFromPath(pathname: string): DashboardAction {
   const normalized = pathname.replace(/\/+$/, "") || "/"
   if (normalized === "/unstake") return "unstake"
@@ -264,6 +303,7 @@ export function App() {
   )
   const [amount, setAmount] = useState("")
   const [txPlan, setTxPlan] = useState<TxPlan | null>(null)
+  const [txExecution, setTxExecution] = useState<ActionExecutionSummary | null>(null)
   const [modal, setModal] = useState<Modal>(null)
   const [showOnlyActive, setShowOnlyActive] = useState(() => readStorageFlag(appStorageKeys.validatorsActiveOnly))
   const [validatorQuery, setValidatorQuery] = useState(() => readStorageText(appStorageKeys.validatorQuery) ?? "")
@@ -657,12 +697,14 @@ export function App() {
   const updateAmount = useCallback((nextAmount: string) => {
     setAmount(nextAmount)
     setTxPlan(null)
+    setTxExecution(null)
   }, [])
 
   const updateValidator = useCallback((nextValidator: Address) => {
     setValidator(nextValidator)
     writeStorageAddress(appStorageKeys.selectedValidator, nextValidator)
     setTxPlan(null)
+    setTxExecution(null)
   }, [])
 
   const updateShowOnlyActive = useCallback((nextValue: boolean) => {
@@ -695,6 +737,7 @@ export function App() {
     setLiveDataMeta(null)
     setLiveError("")
     setTxPlan(null)
+    setTxExecution(null)
     setTxProgress("")
     setValidators((current) => current.map(clearValidatorPosition))
   }, [])
@@ -1342,6 +1385,7 @@ export function App() {
     }
     setAction(nextAction)
     setTxPlan(null)
+    setTxExecution(null)
     setIsSubmitting(true)
     setSubmittingAction(nextAction)
     try {
@@ -1357,7 +1401,12 @@ export function App() {
       const simulatedPlan = await simulateTxPlan(nextPlan, { requireAuth: true })
       if (simulatedPlan.simulation?.status === "failed") throw new Error(simulatedPlan.simulation.message)
       setTxPlan(simulatedPlan)
-      await submitPlan(simulatedPlan, { alreadySubmitting: true, requireAuth: true, skipValidation: true })
+      await submitPlan(simulatedPlan, {
+        actionKey: nextAction,
+        alreadySubmitting: true,
+        requireAuth: true,
+        skipValidation: true,
+      })
     } catch (error) {
       toast(readableSimulationError(error, t.transactionFailed), "warning")
     } finally {
@@ -1388,6 +1437,7 @@ export function App() {
     }
     setAction("claim-rewards")
     setTxPlan(null)
+    setTxExecution(null)
     setIsSubmitting(true)
     setSubmittingAction("claim-rewards-and-stake")
     try {
@@ -1398,7 +1448,12 @@ export function App() {
       const simulatedPlan = await simulateTxPlan(nextPlan, { requireAuth: true })
       if (simulatedPlan.simulation?.status === "failed") throw new Error(simulatedPlan.simulation.message)
       setTxPlan(simulatedPlan)
-      await submitPlan(simulatedPlan, { alreadySubmitting: true, requireAuth: true, skipValidation: true })
+      await submitPlan(simulatedPlan, {
+        actionKey: "claim-rewards-and-stake",
+        alreadySubmitting: true,
+        requireAuth: true,
+        skipValidation: true,
+      })
     } catch (error) {
       toast(readableSimulationError(error, t.transactionFailed), "warning")
     } finally {
@@ -1497,25 +1552,62 @@ export function App() {
       const requireAuth = Boolean(options.requireAuth && !customRpcEnabled)
       const authToken = requireAuth ? (rpcAuthToken ?? (await ensureRpcAuthTokenForCurrentWallet())) : null
       const publicClient = createSafenetPublicClient({ authToken, rpcUrl: effectiveRpcUrl })
+      const refreshedForExecution = await refreshLiveReads(subjectAccount, { forceRefresh: true })
+      const liveSnapshotForExecution = refreshedForExecution?.snapshot ?? liveSnapshot
+      if (!liveSnapshotForExecution) throw new Error(t.connectToPlan)
+      const reconciled = reconcileTxPlanForExecution(planToSubmit, {
+        cumulativeClaimed: liveSnapshotForExecution.cumulativeClaimed,
+        stakingAllowance: liveSnapshotForExecution.stakingAllowance,
+      })
+      const executionAction = options.actionKey ?? planToSubmit.action
+      if (!reconciled.plan) {
+        const execution = createExecutionState(executionAction, planToSubmit.title, reconciled.steps, {
+          status: "completed",
+        })
+        setTxExecution(execution)
+        setTxPlan(planToSubmit)
+        toast(t.executionCompletedTitle, "success")
+        return
+      }
+      const executablePlan = {
+        ...reconciled.plan,
+        simulation: planToSubmit.simulation,
+      }
+      setTxPlan(executablePlan)
+      setTxExecution(createExecutionState(executionAction, planToSubmit.title, reconciled.steps))
       let confirmedTxCount = 0
       if (!isSelfSubject(walletIdentity)) {
         const safeMode = await resolveSafeExecutionMode({ client: publicClient, safe: subjectAccount, signer: account })
         if (safeMode.kind === "not-owner") throw new Error(t.safeOwnerRequired)
         if (safeMode.kind === "multi-owner") {
-          exportSafePayload(planToSubmit)
+          exportSafePayload(executablePlan)
           toast(`${t.safeMultisigThresholdExport} (${safeMode.threshold.toString()}/${safeMode.owners.length})`, "info")
           return
         }
         try {
-          confirmedTxCount = await submitSafeOwnerPlan({ client, publicClient, plan: planToSubmit })
+          confirmedTxCount = await submitSafeOwnerPlan({
+            client,
+            executionAction,
+            executionSteps: reconciled.steps,
+            publicClient,
+            plan: executablePlan,
+          })
         } finally {
           if (confirmedTxCount > 0) await refreshLiveReads(subjectAccount, { forceRefresh: true })
         }
         return
       }
       try {
-        for (const tx of planToSubmit.txs) {
+        for (const tx of executablePlan.txs) {
           const label = translateTxLabel(tx.label, t)
+          setTxExecution((current) =>
+            current
+              ? {
+                  ...current,
+                  currentLabel: label,
+                }
+              : current,
+          )
           setTxProgress(`${t.simulationStatus}: ${label}`)
           try {
             await publicClient.call({
@@ -1542,12 +1634,58 @@ export function App() {
           })
           if (receipt.status !== "success") throw new Error(`${t.transactionFailed} ${label}`)
           confirmedTxCount += 1
+          setTxExecution((current) =>
+            current
+              ? {
+                  ...current,
+                  completedCount: current.completedCount + 1,
+                  currentLabel: label,
+                  pendingCount: Math.max(0, current.pendingCount - 1),
+                  steps: current.steps.map((step) =>
+                    step.label === tx.label && step.status === "pending" ? { ...step, status: "done" } : step,
+                  ),
+                }
+              : current,
+          )
           toast(`${t.confirmedTx}: ${label}`, "success")
         }
+        setTxExecution((current) =>
+          current
+            ? {
+                ...current,
+                currentLabel: null,
+                pendingCount: 0,
+                status: "completed",
+              }
+            : current,
+        )
       } finally {
         if (confirmedTxCount > 0) await refreshLiveReads(subjectAccount, { forceRefresh: true })
       }
     } catch (error) {
+      const rejected = isUserRejectedRequest(error)
+      const message = readableSimulationError(error, t.transactionFailed)
+      setTxExecution((current) => {
+        if (!current) return current
+        const nextSteps = [...current.steps]
+        const pendingIndex = nextSteps.findIndex((step) => step.status === "pending")
+        if (pendingIndex >= 0) {
+          nextSteps[pendingIndex] = {
+            ...nextSteps[pendingIndex],
+            status: rejected ? "cancelled" : "failed",
+          }
+        }
+        const pendingCount = nextSteps.filter((step) => step.status === "pending").length
+        return {
+          ...current,
+          currentLabel: null,
+          errorMessage: message,
+          pendingCount,
+          status: current.completedCount > 0 || current.skippedCount > 0 ? "partial" : "failed",
+          steps: nextSteps,
+          userRejected: rejected,
+        }
+      })
       toast(readableSimulationError(error, t.transactionFailed), "warning")
     } finally {
       if (!options.alreadySubmitting) setIsSubmitting(false)
@@ -1558,6 +1696,8 @@ export function App() {
 
   async function submitSafeOwnerPlan(params: {
     client: ReturnType<typeof createWalletClient>
+    executionAction: TxPlanAction | "claim-rewards-and-stake"
+    executionSteps: ActionExecutionSummary["steps"]
     publicClient: ReturnType<typeof createSafenetPublicClient>
     plan: TxPlan
   }) {
@@ -1565,6 +1705,16 @@ export function App() {
     let confirmedTxCount = 0
     for (const tx of params.plan.txs) {
       const label = translateTxLabel(tx.label, t)
+      setTxExecution((current) =>
+        current
+          ? {
+              ...current,
+              currentLabel: label,
+            }
+          : createExecutionState(params.executionAction, params.plan.title, params.executionSteps, {
+              currentLabel: label,
+            }),
+      )
       setTxProgress(`${t.simulationStatus}: ${label}`)
       const safeTx = buildSafeExecTransaction({ safe: subjectAccount, signer: account, tx })
       try {
@@ -1593,8 +1743,31 @@ export function App() {
       })
       if (receipt.status !== "success") throw new Error(`${t.transactionFailed} ${label}`)
       confirmedTxCount += 1
+      setTxExecution((current) =>
+        current
+          ? {
+              ...current,
+              completedCount: current.completedCount + 1,
+              currentLabel: label,
+              pendingCount: Math.max(0, current.pendingCount - 1),
+              steps: current.steps.map((step) =>
+                step.label === tx.label && step.status === "pending" ? { ...step, status: "done" } : step,
+              ),
+            }
+          : current,
+      )
       toast(`${t.confirmedTx}: ${label}`, "success")
     }
+    setTxExecution((current) =>
+      current
+        ? {
+            ...current,
+            currentLabel: null,
+            pendingCount: 0,
+            status: "completed",
+          }
+        : current,
+    )
     return confirmedTxCount
   }
 
@@ -1645,6 +1818,7 @@ export function App() {
       updateDashboardAction(nextAction)
     }
     setTxPlan(null)
+    setTxExecution(null)
     if ((nextAction === "stake" || nextAction === "unstake") && window.location.pathname !== navPaths.dashboard) {
       setActiveNav("dashboard")
       window.history.pushState(null, "", navPaths.dashboard)
@@ -1668,6 +1842,7 @@ export function App() {
       updateDashboardAction(nextAction)
     }
     setTxPlan(null)
+    setTxExecution(null)
     return true
   }
 
@@ -1713,8 +1888,10 @@ export function App() {
     try {
       await navigator.clipboard.writeText(value)
       toast(t.copied, "success")
+      return true
     } catch {
       toast(t.copyFailed, "warning")
+      return false
     }
   }
 
@@ -1901,9 +2078,14 @@ export function App() {
                 <ShieldCheck size={15} />
                 <strong>{t.chainIdentity}</strong>
               </span>
-              <button type="button" className="summary-contract-chip" onClick={() => openExplorer(CONTRACTS.staking)}>
-                {t.stakingContractShort} <ExternalLink size={12} />
-              </button>
+              <ExternalActionButton
+                className="summary-contract-chip action-text-button"
+                label={`${t.openExplorer} ${t.stakingContractShort}`}
+                onOpen={() => openExplorer(CONTRACTS.staking)}
+                size={12}
+              >
+                {t.stakingContractShort}
+              </ExternalActionButton>
             </section>
             <button
               type="button"
@@ -1919,7 +2101,6 @@ export function App() {
         </div>
         {activeNav === "dashboard" && (
           <section className="summary-card enter">
-            {liveError && <p className="warning">{liveError}</p>}
             {!account && (
               <div className="connect-panel">
                 <Wallet size={20} />
@@ -2047,6 +2228,7 @@ export function App() {
           <RewardsView
             t={t}
             actionPreview={rewardsActionPreview}
+            executionState={txExecution}
             executeClaimRewardsAndStake={executeClaimRewardsAndStake}
             executeAction={executeAction}
             isSubmitting={isSubmitting}
@@ -2156,6 +2338,7 @@ export function App() {
       <AgentLauncher
         t={t}
         context={agentContext}
+        executionState={txExecution}
         isSubmitting={isSubmitting}
         txProgress={txProgress}
         userLlmConfig={userLlmConfig}
@@ -2343,7 +2526,7 @@ function mergeDiscoveredSafes(
     const existing = merged.get(key)
     merged.set(key, preferSafeWithMetadata(existing, safe))
   }
-  return [...merged.values()]
+  return [...merged.values()].sort((a, b) => a.address.toLowerCase().localeCompare(b.address.toLowerCase()))
 }
 
 function preferSafeWithMetadata(current: DiscoveredSafe | undefined, next: DiscoveredSafe): DiscoveredSafe {

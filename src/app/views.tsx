@@ -4,9 +4,7 @@ import {
   CheckCircle2,
   Clock3,
   Database,
-  ExternalLink,
   Gift,
-  Github,
   Info,
   ShieldCheck,
   TerminalSquare,
@@ -30,8 +28,21 @@ import {
 import { type ChainTxStepStatus, chainActionBusyLabel, chainTxStepStatuses } from "./actionStatus"
 import { formatDelayLabel, merkleLabel, translateTxLabel } from "./formatters"
 import type { MessageBundle } from "./i18n"
-import type { AccountSummary, Action, DataStatus, Modal, NavItem } from "./types"
-import { ActionButton, ButtonBusyLabel, CustomSelect, FullPanel, InfoCard, Progress, StatusBadge, Tooltip } from "./ui"
+import { sourceRepositoryUrl } from "./releaseTrust"
+import type { AccountSummary, Action, ActionExecutionSummary, DataStatus, Modal, NavItem } from "./types"
+import {
+  ActionButton,
+  ButtonBusyLabel,
+  CopyActionButton,
+  CustomSelect,
+  ExecutionSummaryCard,
+  ExternalActionButton,
+  FullPanel,
+  InfoCard,
+  Progress,
+  StatusBadge,
+  Tooltip,
+} from "./ui"
 
 type ValidatorSort = "stake" | "participation" | "commission" | "name" | "yourStake"
 type SubmittingAction = Action | "claim-rewards-and-stake" | null
@@ -67,8 +78,6 @@ const validatorSkeletonKeys = [
   "validator-skeleton-3",
   "validator-skeleton-4",
 ]
-const sourceRepositoryUrl = "https://github.com/cosin2077/safecafe"
-
 export function DashboardView(props: {
   t: MessageBundle
   action: Action
@@ -266,11 +275,6 @@ export function DashboardView(props: {
               <TransactionPreview t={t} title={t.claimToWallet} preview={props.actionPreview} />
               <TransactionPreview t={t} title={t.claimAndRestake} preview={props.restakePreview} />
               <p className="restake-preview-note">{t.restakePreview}</p>
-              <ol className="restake-flow-steps" aria-label={t.claimAndRestake}>
-                <li>{t.claimToWallet}</li>
-                <li>{t.allowance}</li>
-                <li>{t.stakeAction}</li>
-              </ol>
               <ChainProgressPanel t={t} txPlan={props.txPlan} txProgress={props.txProgress} />
             </div>
           )}
@@ -486,9 +490,15 @@ export function ValidatorTable(props: {
           <article className="validator-row" key={item.address}>
             <div className="validator-identity">
               <strong>{item.label}</strong>
-              <button className="validator-address-link" type="button" onClick={() => props.openExplorer(item.address)}>
-                {compactAddress(item.address, 6, 4)}
-              </button>
+              <span className="validator-address-inline">
+                <span>{compactAddress(item.address, 6, 4)}</span>
+                <ExternalActionButton
+                  className="validator-inline-action"
+                  label={`${t.openExplorer} ${item.label}`}
+                  onOpen={() => props.openExplorer(item.address)}
+                  size={13}
+                />
+              </span>
             </div>
             <ValidatorStat label={t.commission} tooltip={t.commissionTooltip} value={`${item.commission}%`} />
             <ValidatorStat
@@ -846,6 +856,7 @@ export function WithdrawalsView(props: {
 export function RewardsView(props: {
   actionPreview: ActionPreview
   dataStatus: DataStatus
+  executionState: ActionExecutionSummary | null
   executeClaimRewardsAndStake: (validator: Address) => Promise<void>
   executeAction: (action?: Action, options?: ExecuteActionOptions) => Promise<void>
   isSubmitting: boolean
@@ -866,6 +877,8 @@ export function RewardsView(props: {
   const showClaimRewardsProgress = isClaimingRewards && Boolean(props.txProgress)
   const showClaimAndRestakeProgress = isClaimingAndRestaking && Boolean(props.txProgress)
   const busyActionLabel = chainActionBusyLabel(t, props.txProgress)
+  const rewardExecution = props.executionState?.action === "claim-rewards" ? props.executionState : null
+  const restakeExecution = props.executionState?.action === "claim-rewards-and-stake" ? props.executionState : null
   const validatorOptions = props.validators.map((item) => ({
     value: item.address,
     label: item.label,
@@ -915,6 +928,7 @@ export function RewardsView(props: {
           >
             {isClaimingRewards ? <ButtonBusyLabel>{busyActionLabel}</ButtonBusyLabel> : t.claimToWallet}
           </button>
+          {!showClaimRewardsProgress && rewardExecution && <ExecutionSummaryCard summary={rewardExecution} t={t} />}
           {showClaimRewardsProgress && <ChainProgressPanel t={t} txPlan={props.txPlan} txProgress={props.txProgress} />}
         </section>
 
@@ -950,6 +964,9 @@ export function RewardsView(props: {
             <span aria-hidden="true">✨</span>
             {isClaimingAndRestaking ? <ButtonBusyLabel>{busyActionLabel}</ButtonBusyLabel> : t.claimAndRestake}
           </button>
+          {!showClaimAndRestakeProgress && restakeExecution && (
+            <ExecutionSummaryCard summary={restakeExecution} t={t} />
+          )}
           {showClaimAndRestakeProgress && (
             <ChainProgressPanel t={t} txPlan={props.txPlan} txProgress={props.txProgress} />
           )}
@@ -978,7 +995,7 @@ export function DocsView({
   userLlmSaved,
   userLlmStatus,
 }: {
-  copyText: (value: string) => Promise<void>
+  copyText: (value: string) => Promise<boolean>
   customRpcMessage: string
   customRpcSavedUrl: string
   customRpcStatus: CustomRpcStatus
@@ -1042,13 +1059,18 @@ export function DocsView({
                 <strong>{compactAddress(item.address, 10, 8)}</strong>
               </span>
               <div>
-                <button type="button" className="code-button" onClick={() => void copyText(item.address)}>
-                  {t.copy}
-                </button>
-                <button type="button" className="code-button" onClick={() => openExplorer(item.address)}>
-                  <ExternalLink size={14} />
-                  {t.openExplorer}
-                </button>
+                <CopyActionButton
+                  className="code-icon-button"
+                  copiedLabel={t.copied}
+                  label={`${t.copy} ${item.label}`}
+                  onCopy={copyText}
+                  value={item.address}
+                />
+                <ExternalActionButton
+                  className="code-icon-button"
+                  label={`${t.openExplorer} ${item.label}`}
+                  onOpen={() => openExplorer(item.address)}
+                />
               </div>
             </div>
           ))}
@@ -1058,15 +1080,13 @@ export function DocsView({
               <strong>{t.frontendIntegrityValue}</strong>
             </span>
             <div>
-              <a
-                className="code-button"
+              <ExternalActionButton
+                className="code-button action-text-button"
                 href={`${EXPLORER_BASE_URL}/address/${CONTRACTS.staking}`}
-                target="_blank"
-                rel="noreferrer"
+                label="Etherscan"
               >
-                <ExternalLink size={14} />
                 Etherscan
-              </a>
+              </ExternalActionButton>
             </div>
           </div>
           <div className="trust-row">
@@ -1081,10 +1101,13 @@ export function DocsView({
               <strong>{t.githubRepository}</strong>
             </span>
             <div>
-              <a className="code-button" href={sourceRepositoryUrl} target="_blank" rel="noreferrer">
-                <Github size={14} />
+              <ExternalActionButton
+                className="code-button action-text-button"
+                href={sourceRepositoryUrl}
+                label="GitHub"
+              >
                 GitHub
-              </a>
+              </ExternalActionButton>
             </div>
           </div>
         </div>

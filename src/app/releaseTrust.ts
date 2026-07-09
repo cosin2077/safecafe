@@ -86,6 +86,7 @@ const idleEnsState: EnsContenthashState = {
 
 export const safeStakingEnsName = "safe-staking.eth"
 export const safeStakingEthLimoUrl = "https://safe-staking.eth.limo/"
+export const sourceRepositoryUrl = "https://github.com/ioplustech/safecafe"
 
 export function createReleaseTrustLoadingState(): ReleaseTrustState {
   return {
