@@ -21,13 +21,13 @@ import {
 import type { RpcGatewayEnv } from "./serverEnv"
 
 type AgentApiEnv = RpcGatewayEnv & {
-  SAFECAFE_AGENT_AUTH?: string
   SAFECAFE_AGENT_TEST_VERIFIED_ACCESS?: string
   SAFECAFE_LLM_API_BASE?: string
   SAFECAFE_LLM_API_MODEL?: string
   SAFECAFE_LLM_API_KEY?: string
   SAFECAFE_LLM_TIMEOUT_MS?: string
   SAFECAFE_LLM_MAX_TOKENS?: string
+  SAFECAFE_LLM_HEADER?: string
   VITE_AGENT_AUTH?: string
 }
 
@@ -178,6 +178,7 @@ export async function handleAgentApiRequest(request: Request, env: AgentApiEnv):
       maxTokens,
       model,
       request: parsed.value,
+      serviceHeader: env.SAFECAFE_LLM_HEADER,
       timeoutMs,
     })
   }
@@ -188,6 +189,7 @@ export async function handleAgentApiRequest(request: Request, env: AgentApiEnv):
     maxTokens,
     model,
     request: parsed.value,
+    serviceHeader: env.SAFECAFE_LLM_HEADER,
     timeoutMs,
   })
   return agentResponse(parsed.value, upstream.content, upstream.source, upstream.thinking, context, upstream.tools)
@@ -231,7 +233,7 @@ async function verifyAgentAccess(
   if (env.SAFECAFE_AGENT_TEST_VERIFIED_ACCESS === "true") {
     return { status: "eligible", reason: "Test-only server-side eligibility override passed." }
   }
-  if (!resolveAgentAuthRequired({ safecafeAgentAuth: env.SAFECAFE_AGENT_AUTH, viteAgentAuth: env.VITE_AGENT_AUTH })) {
+  if (!resolveAgentAuthRequired(env.VITE_AGENT_AUTH)) {
     return { status: "eligible", reason: "Agent auth is disabled by configuration." }
   }
   if (!request.context.account || !isAddress(request.context.account)) {
@@ -286,6 +288,7 @@ async function callUpstream(params: {
   maxTokens: number
   model: string
   request: SanitizedRequest
+  serviceHeader?: string
   timeoutMs: number
 }): Promise<{ content: string; source: "fallback" | "llm"; thinking?: string; tools?: AgentToolEvent[] }> {
   const controller = new AbortController()
@@ -300,6 +303,7 @@ async function callUpstream(params: {
       messages,
       model: params.model,
       signal: controller.signal,
+      serviceHeader: params.serviceHeader,
       tools: agentToolDefinitions,
     })
     if (!first.ok) {
@@ -334,6 +338,7 @@ async function callUpstream(params: {
         ],
         model: params.model,
         signal: controller.signal,
+        serviceHeader: params.serviceHeader,
         tools: agentToolDefinitions,
       })
       if (!second.ok) {
@@ -390,6 +395,7 @@ function callChatCompletion(params: {
   messages: UpstreamMessage[]
   model: string
   signal: AbortSignal
+  serviceHeader?: string
   stream?: boolean
   tools?: AgentToolDefinition[]
 }) {
@@ -398,6 +404,7 @@ function callChatCompletion(params: {
     headers: {
       authorization: `Bearer ${params.apiKey}`,
       "content-type": "application/json",
+      ...(params.serviceHeader ? { "x-service-id": params.serviceHeader } : {}),
     },
     body: JSON.stringify({
       model: params.model,
@@ -595,6 +602,7 @@ function streamingAgentResponse(params: {
   maxTokens: number
   model: string
   request: SanitizedRequest
+  serviceHeader?: string
   timeoutMs: number
 }) {
   const encoder = new TextEncoder()
@@ -612,6 +620,7 @@ function streamingAgentResponse(params: {
           messages,
           model: params.model,
           signal: controllerAbort.signal,
+          serviceHeader: params.serviceHeader,
           stream: true,
           tools: agentToolDefinitions,
         })
@@ -656,6 +665,7 @@ function streamingAgentResponse(params: {
             ],
             model: params.model,
             signal: controllerAbort.signal,
+            serviceHeader: params.serviceHeader,
             stream: true,
             tools: agentToolDefinitions,
           })

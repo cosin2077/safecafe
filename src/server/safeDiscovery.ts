@@ -6,8 +6,6 @@ import { createRequestContext, logServerEvent, truncateMessage, withRequestHeade
 import type { RpcGatewayEnv } from "./serverEnv"
 
 const mainnetSafeTransactionService = "https://api.safe.global/tx-service/eth"
-const maxSafeDiscoveryDepth = 3
-const maxDiscoveredSafes = 25
 
 type SafeOwnerResponse = {
   safes?: unknown
@@ -63,13 +61,12 @@ export async function handleSafeDiscoveryRequest(request: Request, env: RpcGatew
 
   try {
     const normalizedOwner = getAddress(owner)
-    const safeAddresses = await discoverSafeAddresses(normalizedOwner, context)
+    const safeAddresses = await fetchSafeAddressesForOwner(normalizedOwner)
     const client = await createSafeDiscoveryClient(env)
     const safes = await Promise.all(
       safeAddresses.map((address) => readSafeMultisigMetadataOrEmpty(address, env, context, client)),
     )
     logServerEvent(context, "info", "safe.discovery.success", {
-      depth: maxSafeDiscoveryDepth,
       owner: normalizedOwner,
       safes: safes.length,
     })
@@ -92,56 +89,6 @@ export async function handleSafeDiscoveryRequest(request: Request, env: RpcGatew
       "safe_discovery_failed",
     )
   }
-}
-
-async function discoverSafeAddresses(owner: Address, context: ReturnType<typeof createRequestContext>) {
-  const discovered = new Map<string, Address>()
-  const visitedOwners = new Set<string>()
-  let frontier: Array<{ owner: Address; depth: number }> = [{ owner, depth: 0 }]
-
-  while (frontier.length > 0 && discovered.size < maxDiscoveredSafes) {
-    const nextFrontier: Array<{ owner: Address; depth: number }> = []
-    const currentFrontier = frontier
-    frontier = nextFrontier
-
-    const results = await Promise.all(
-      currentFrontier.map(async (item) => {
-        const ownerKey = item.owner.toLowerCase()
-        if (visitedOwners.has(ownerKey)) return { depth: item.depth, owner: item.owner, safes: [] as Address[] }
-        visitedOwners.add(ownerKey)
-        try {
-          return {
-            depth: item.depth,
-            owner: item.owner,
-            safes: await fetchSafeAddressesForOwner(item.owner),
-          }
-        } catch (error) {
-          logServerEvent(context, item.depth === 0 ? "error" : "warn", "safe.discovery.owner_failed", {
-            depth: item.depth,
-            error: truncateMessage(error instanceof Error ? error.message : "Failed to discover Safe accounts."),
-            owner: item.owner,
-          })
-          if (item.depth === 0) throw error
-          return { depth: item.depth, owner: item.owner, safes: [] as Address[] }
-        }
-      }),
-    )
-
-    for (const result of results) {
-      for (const safe of result.safes) {
-        if (discovered.size >= maxDiscoveredSafes) break
-        const safeKey = safe.toLowerCase()
-        if (!discovered.has(safeKey)) discovered.set(safeKey, safe)
-        if (result.depth < maxSafeDiscoveryDepth && !visitedOwners.has(safeKey)) {
-          nextFrontier.push({ owner: safe, depth: result.depth + 1 })
-        }
-      }
-    }
-
-    frontier = nextFrontier
-  }
-
-  return [...discovered.values()]
 }
 
 async function fetchSafeAddressesForOwner(owner: Address): Promise<Address[]> {

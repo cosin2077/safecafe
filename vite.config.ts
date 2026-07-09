@@ -56,7 +56,6 @@ export default defineConfig({
         const env = {
           SAFECAFE_RPC_ALLOW_ALL_WALLETS: process.env.SAFECAFE_RPC_ALLOW_ALL_WALLETS,
           SAFECAFE_AUTH_SECRET: process.env.SAFECAFE_AUTH_SECRET,
-          SAFECAFE_AGENT_AUTH: process.env.SAFECAFE_AGENT_AUTH,
           SAFECAFE_MOCK_ACCOUNT: process.env.SAFECAFE_MOCK_ACCOUNT,
           SAFECAFE_MOCK_ACCOUNT_LIVE: process.env.SAFECAFE_MOCK_ACCOUNT_LIVE,
           SAFECAFE_RPC_URL: process.env.SAFECAFE_RPC_URL,
@@ -66,6 +65,7 @@ export default defineConfig({
           SAFECAFE_LLM_API_KEY: process.env.SAFECAFE_LLM_API_KEY,
           SAFECAFE_LLM_TIMEOUT_MS: process.env.SAFECAFE_LLM_TIMEOUT_MS,
           SAFECAFE_LLM_MAX_TOKENS: process.env.SAFECAFE_LLM_MAX_TOKENS,
+          SAFECAFE_LLM_HEADER: process.env.SAFECAFE_LLM_HEADER,
           VITE_AGENT_AUTH: process.env.VITE_AGENT_AUTH,
         }
         server.middlewares.use("/api/agent", async (req, res) => {

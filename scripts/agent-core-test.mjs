@@ -1244,7 +1244,7 @@ try {
       }),
     }),
     {
-      SAFECAFE_AGENT_AUTH: "false",
+      VITE_AGENT_AUTH: "false",
       SAFECAFE_LLM_API_BASE: "https://llm.example",
       SAFECAFE_LLM_API_MODEL: "test",
       SAFECAFE_LLM_API_KEY: "secret",
@@ -1325,7 +1325,7 @@ try {
       }),
     }),
     {
-      SAFECAFE_AGENT_AUTH: "false",
+      VITE_AGENT_AUTH: "false",
       SAFECAFE_LLM_API_BASE: "https://llm.example",
       SAFECAFE_LLM_API_MODEL: "test",
       SAFECAFE_LLM_API_KEY: "secret",
@@ -1372,7 +1372,7 @@ try {
       }),
     }),
     {
-      SAFECAFE_AGENT_AUTH: "false",
+      VITE_AGENT_AUTH: "false",
       SAFECAFE_LLM_API_BASE: "https://llm.example",
       SAFECAFE_LLM_API_MODEL: "test",
       SAFECAFE_LLM_API_KEY: "secret",
@@ -1416,7 +1416,7 @@ try {
       }),
     }),
     {
-      SAFECAFE_AGENT_AUTH: "false",
+      VITE_AGENT_AUTH: "false",
       SAFECAFE_LLM_API_BASE: "https://llm.example",
       SAFECAFE_LLM_API_MODEL: "test",
       SAFECAFE_LLM_API_KEY: "secret",
@@ -1455,7 +1455,7 @@ try {
       }),
     }),
     {
-      SAFECAFE_AGENT_AUTH: "false",
+      VITE_AGENT_AUTH: "false",
       SAFECAFE_LLM_API_BASE: "https://llm.example",
       SAFECAFE_LLM_API_MODEL: "test",
       SAFECAFE_LLM_API_KEY: "secret",
@@ -1499,7 +1499,7 @@ try {
       }),
     }),
     {
-      SAFECAFE_AGENT_AUTH: "false",
+      VITE_AGENT_AUTH: "false",
       SAFECAFE_LLM_API_BASE: "https://llm.example",
       SAFECAFE_LLM_API_MODEL: "test",
       SAFECAFE_LLM_API_KEY: "secret",
@@ -1535,7 +1535,7 @@ try {
       }),
     }),
     {
-      SAFECAFE_AGENT_AUTH: "false",
+      VITE_AGENT_AUTH: "false",
       SAFECAFE_LLM_API_BASE: "https://llm.example",
       SAFECAFE_LLM_API_MODEL: "test",
       SAFECAFE_LLM_API_KEY: "secret",
@@ -1782,7 +1782,7 @@ try {
     {
       SAFECAFE_AUTH_SECRET: "test-secret",
       SAFECAFE_RPC_ALLOW_ALL_WALLETS: "true",
-      SAFECAFE_AGENT_AUTH: "false",
+      VITE_AGENT_AUTH: "false",
       SAFECAFE_LLM_API_BASE: "https://llm.example",
       SAFECAFE_LLM_API_MODEL: "test",
       SAFECAFE_LLM_API_KEY: "secret",

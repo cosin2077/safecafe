@@ -5,12 +5,12 @@ export const onRequestPost: PagesFunction<{
   SAFECAFE_AUTH_SECRET?: string
   SAFECAFE_RPC_URL?: string
   SAFECAFE_RPC_URLS?: string
-  SAFECAFE_AGENT_AUTH?: string
   SAFECAFE_LLM_API_BASE?: string
   SAFECAFE_LLM_API_MODEL?: string
   SAFECAFE_LLM_API_KEY?: string
   SAFECAFE_LLM_TIMEOUT_MS?: string
   SAFECAFE_LLM_MAX_TOKENS?: string
+  SAFECAFE_LLM_HEADER?: string
   VITE_AGENT_AUTH?: string
 }> = async ({ request, env }) => handleAgentApiRequest(request, env)
 

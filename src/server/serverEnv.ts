@@ -3,7 +3,6 @@ export type RpcGatewayEnv = {
   SAFECAFE_AUTH_SECRET?: string
   SAFECAFE_MOCK_ACCOUNT?: string
   SAFECAFE_MOCK_ACCOUNT_LIVE?: string
-  SAFECAFE_AGENT_AUTH?: string
   SAFECAFE_RPC_URL?: string
   SAFECAFE_RPC_URLS?: string
   SAFECAFE_LLM_API_BASE?: string
@@ -11,5 +10,6 @@ export type RpcGatewayEnv = {
   SAFECAFE_LLM_API_KEY?: string
   SAFECAFE_LLM_TIMEOUT_MS?: string
   SAFECAFE_LLM_MAX_TOKENS?: string
+  SAFECAFE_LLM_HEADER?: string
   VITE_AGENT_AUTH?: string
 }
