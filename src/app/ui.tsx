@@ -164,6 +164,11 @@ export function ExecutionSummaryCard({
             <small>
               {summary.safeProposal.confirmations}/{summary.safeProposal.threshold} · {summary.safeProposal.safeTxHash}
             </small>
+            {summary.safeProposal.txLabel && (
+              <small>
+                #{(summary.safeProposal.txIndex ?? 0) + 1} · {translateTxLabel(summary.safeProposal.txLabel, t)}
+              </small>
+            )}
           </span>
           <div className="execution-safe-actions">
             {onCopySafeTxHash && (

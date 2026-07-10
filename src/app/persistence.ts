@@ -12,6 +12,7 @@ export const appStorageKeys = {
   locale: "safecafe:locale",
   rpcSession: "safecafe:rpc-session",
   safePrice: "safecafe.safeUsdPrice.v1",
+  safeProposal: "safecafe:safe-proposal:v1",
   selectedValidator: "safecafe:selected-validator",
   validatorQuery: "safecafe:validator-query",
   validatorSort: "safecafe:validator-sort",

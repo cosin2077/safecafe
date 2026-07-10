@@ -47,6 +47,9 @@ try {
   await runScenario("staking decision and trust surfaces", () => runDecisionSurfaceFlow(page, driver))
   await runScenario("safe multisig discovery and selection", () => runSafeDiscoveryFlow(page))
   await runScenario("safe threshold proposal flow", () => runSafeThresholdProposalFlow(page, driver, chain))
+  await runScenario("safe threshold two-transaction proposal flow", () =>
+    runSafeThresholdTwoTransactionProposalFlow(page, driver, chain),
+  )
   await runScenario("dashboard tab switching and validation timing", () => runDashboardTabPersistenceFlow(driver))
   await runScenario("empty unstake tab switching", () => runEmptyUnstakeTabSwitchingFlow(driver, chain))
   await runScenario("staking overview validator positions", () => runDashboardValidatorDetailsFlow(driver))
@@ -119,7 +122,7 @@ async function runSafeThresholdProposalFlow(page, driver, chain) {
     chain.state.safes = ["0x1111111111111111111111111111111111111111"]
     chain.state.safeOwners = [account.address, secondOwner]
     chain.state.safeThreshold = 2n
-    chain.state.stakingAllowance = 0n
+    chain.state.stakingAllowance = 2n * 10n ** 18n
     chain.state.safeProposals.clear()
     await page.evaluate(() => {
       window.localStorage.removeItem("safecafe:wallet-subjects")
@@ -156,7 +159,7 @@ async function runSafeThresholdProposalFlow(page, driver, chain) {
       throw new Error(`Expected Safe proposal to request a signature, got ${signCountAfterProposal - signCountBefore}`)
     }
     const proposal = [...chain.state.safeProposals.values()][0]
-    proposal.confirmations.set(secondOwner, { owner: secondOwner, signature: `${secondOwner}:safe-signature` })
+    proposal.confirmations.set(secondOwner, { owner: secondOwner, signature: `0x${"22".repeat(64)}1f` })
     await page.getByRole("button", { name: "Continue Safe flow" }).click()
     await page.getByText("Flow completed").waitFor()
     await driver.expectValidatorStake({ amount: formatSafeAmount(originalStake + 2n * 10n ** 18n) })
@@ -171,6 +174,96 @@ async function runSafeThresholdProposalFlow(page, driver, chain) {
     chain.state.safeProposals.clear()
     await page.evaluate(() => {
       window.localStorage.removeItem("safecafe:account-live-cache:v1")
+      window.localStorage.removeItem("safecafe:wallet-subjects")
+    })
+    await page.reload({ waitUntil: "networkidle" })
+    await driver.connectWallet()
+  }
+}
+
+async function runSafeThresholdTwoTransactionProposalFlow(page, driver, chain) {
+  const originalSafes = chain.state.safes
+  const originalOwners = chain.state.safeOwners
+  const originalThreshold = chain.state.safeThreshold
+  const originalAllowance = chain.state.stakingAllowance
+  const originalSafeBalance = chain.state.safeBalance
+  const originalSafeNonce = chain.state.safeNonce
+  const originalStake = chain.state.validators[0].userStake
+  const secondOwner = "0x2222222222222222222222222222222222222222"
+  const stakeAmount = 2n * 10n ** 18n
+  try {
+    chain.state.safes = ["0x1111111111111111111111111111111111111111"]
+    chain.state.safeOwners = [account.address, secondOwner]
+    chain.state.safeThreshold = 2n
+    chain.state.stakingAllowance = 0n
+    chain.state.safeNonce = 0n
+    chain.state.safeProposals.clear()
+    await page.evaluate(() => {
+      window.localStorage.removeItem("safecafe:account-live-cache:v1")
+      window.localStorage.removeItem("safecafe:safe-proposal:v1")
+      window.localStorage.removeItem("safecafe:wallet-subjects")
+    })
+    await page.reload({ waitUntil: "networkidle" })
+    await driver.connectWallet()
+    await page
+      .getByRole("button", { name: /Wallet:/ })
+      .first()
+      .click()
+    const walletDialog = page.locator(".modal-backdrop", { hasText: "Signer wallet" })
+    await walletDialog.waitFor({ state: "visible" })
+    await walletDialog.getByRole("button", { name: "Use Safe multisig" }).click()
+    await walletDialog.getByRole("button", { name: "Safe multisig address" }).first().click()
+    await page.getByRole("option", { name: /0x111111.*2\/2/ }).click()
+    await walletDialog.locator(".panel-title .icon-button").click()
+    await walletDialog.waitFor({ state: "hidden" })
+
+    await driver.selectDashboardAction("Stake")
+    await driver.fillActionAmount("2")
+    await page.locator(".primary-actions-panel .form-row").getByRole("button", { name: "Stake" }).first().click()
+    const notice = page.getByRole("alertdialog", { name: "Safe multisig flow" })
+    await notice.getByText("This plan has 2 Safe transactions.").waitFor()
+    await notice.getByRole("button", { name: "Continue Safe flow" }).click()
+
+    const proposalCard = page.locator(".execution-safe-proposal")
+    await proposalCard.getByText("Safe proposal pending").waitFor()
+    await proposalCard.getByText(/1\/2/).waitFor()
+    await proposalCard.getByText(/#1 .*Approve SAFE for staking contract/).waitFor()
+    if (chain.state.safeProposals.size !== 1) {
+      throw new Error(`Expected first Safe proposal, got ${chain.state.safeProposals.size}`)
+    }
+    if (chain.state.stakingAllowance !== 0n || chain.state.validators[0].userStake !== originalStake) {
+      throw new Error("First Safe proposal should wait for approval before changing mock chain state.")
+    }
+
+    const firstProposal = [...chain.state.safeProposals.values()][0]
+    firstProposal.confirmations.set(secondOwner, { owner: secondOwner, signature: `0x${"22".repeat(64)}1f` })
+    await proposalCard.getByRole("button", { name: "Continue Safe flow" }).click()
+    await proposalCard.getByText(/#2 .*Stake SAFE to validator/).waitFor()
+    if (chain.state.safeProposals.size !== 2) {
+      throw new Error(`Expected second Safe proposal after executing approve, got ${chain.state.safeProposals.size}`)
+    }
+    if (chain.state.stakingAllowance !== stakeAmount || chain.state.validators[0].userStake !== originalStake) {
+      throw new Error("Approve should execute before the stake proposal is created.")
+    }
+
+    const secondProposal = [...chain.state.safeProposals.values()].at(-1)
+    secondProposal.confirmations.set(secondOwner, { owner: secondOwner, signature: `0x${"33".repeat(64)}1f` })
+    await proposalCard.getByRole("button", { name: "Continue Safe flow" }).click()
+    await page.getByText("Flow completed").waitFor()
+    await driver.expectValidatorStake({ amount: formatSafeAmount(originalStake + stakeAmount) })
+    await driver.expectSafeBalance(formatSafeAmount(originalSafeBalance - stakeAmount))
+  } finally {
+    chain.state.safes = originalSafes
+    chain.state.safeOwners = originalOwners
+    chain.state.safeThreshold = originalThreshold
+    chain.state.stakingAllowance = originalAllowance
+    chain.state.safeBalance = originalSafeBalance
+    chain.state.safeNonce = originalSafeNonce
+    chain.state.validators[0].userStake = originalStake
+    chain.state.safeProposals.clear()
+    await page.evaluate(() => {
+      window.localStorage.removeItem("safecafe:account-live-cache:v1")
+      window.localStorage.removeItem("safecafe:safe-proposal:v1")
       window.localStorage.removeItem("safecafe:wallet-subjects")
     })
     await page.reload({ waitUntil: "networkidle" })
@@ -555,7 +648,7 @@ function parseArgs(rawArgs) {
 }
 
 function resolveServerMode(parsedArgs) {
-  const mode = parsedArgs.server ?? process.env.E2E_SERVER ?? (process.env.E2E_BASE_URL ? "external" : "wrangler")
+  const mode = parsedArgs.server ?? process.env.E2E_SERVER ?? (process.env.E2E_BASE_URL ? "external" : "dev")
   if (mode !== "dev" && mode !== "wrangler" && mode !== "external") {
     throw new Error(`E2E server mode must be dev, wrangler, or external. Received: ${mode}`)
   }

@@ -182,7 +182,6 @@ export async function handlePlan(globals: GlobalOptions, plan: TxPlan, options: 
 
   if (code && code !== "0x") {
     const selectedSigner = await selectSafeSigningKey(keyring, {
-      createSafeProtocolKit: undefined,
       preferredSigner,
       rpcUrl,
       safeAddress: plan.account,

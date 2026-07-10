@@ -1516,7 +1516,7 @@ try {
   assert.equal(feedbackAgentJson.tools[1].status, "completed")
   assert.equal(feedbackAgentJson.tools[1].content, "Feedback recorded.")
   assert.equal(feedbackWrites.length, 1)
-  assert.equal(feedbackWrites[0].key.startsWith("feedback:"), true)
+  assert.equal(feedbackWrites[0].key.startsWith("feedback:raw:"), true)
   const feedbackRecord = JSON.parse(feedbackWrites[0].value)
   assert.equal(feedbackRecord.category, "ux")
   assert.equal(feedbackRecord.area, "agent")
@@ -1557,7 +1557,36 @@ try {
   assert.equal(directFeedbackResponse.status, 200)
   assert.equal(directFeedbackJson.recorded, true)
   assert.equal(directFeedbackWrites.length, 1)
+  assert.equal(directFeedbackWrites[0].key.startsWith("feedback:raw:"), true)
   assert.equal(JSON.parse(directFeedbackWrites[0].value).summary, "Wallet connection copy is unclear.")
+  let globalLimitPutCalled = false
+  const globalLimitResponse = await handleAgentFeedbackRequest(
+    new Request("http://localhost/api/agent/feedback", {
+      method: "POST",
+      body: JSON.stringify({
+        category: "feature_request",
+        originalText: "希望记录更多反馈",
+        severity: "medium",
+      }),
+    }),
+    {
+      SAFECAFE_AGENT_FEEDBACK_DAILY_LIMIT: "0",
+      SAFECAFE_AGENT_FEEDBACK_GLOBAL_DAILY_LIMIT: "1",
+      SAFECAFE_AGENT_FEEDBACK_KV: {
+        async list() {
+          return { keys: [{ name: "feedback:raw:2026-07-10:existing" }], list_complete: true }
+        },
+        async put() {
+          globalLimitPutCalled = true
+        },
+      },
+    },
+  )
+  const globalLimitJson = await globalLimitResponse.json()
+  assert.equal(globalLimitResponse.status, 429)
+  assert.equal(globalLimitJson.code, "agent_feedback_global_daily_limit_exceeded")
+  assert.equal(globalLimitJson.limit, 1)
+  assert.equal(globalLimitPutCalled, false)
   const fallbackFeedbackResponse = await handleAgentFeedbackRequest(
     new Request("http://localhost/api/agent/feedback", {
       method: "POST",

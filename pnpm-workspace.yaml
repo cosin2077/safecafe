@@ -1,6 +1,7 @@
 packages:
   - .
   - cli
+  - packages/*
 
 allowBuilds:
   esbuild: true

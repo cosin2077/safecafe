@@ -1,9 +1,18 @@
 import { readFileSync } from "node:fs"
 import { stdin as input, stdout as outputStream } from "node:process"
 import { createInterface } from "node:readline/promises"
-import SafeApiKit from "@safe-global/api-kit"
-import Safe from "@safe-global/protocol-kit"
-import { type Address, createWalletClient, type Hex, http } from "viem"
+import {
+  DirectSafeTxServiceClient,
+  normalizeSafeLitePersonalSignature,
+  readSafeLiteAccount,
+  type SafeLiteSendTransaction,
+  type SafeLiteSignHash,
+  type SafeLiteTxService,
+  type SafeLiteWaitForReceipt,
+  safeTxServiceUrl,
+  submitSafeLitePlan,
+} from "@safecafe/safe-lite"
+import { type Address, createWalletClient, type Hex, http, type PublicClient } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
 import { compactAddress, createSafenetPublicClient, DEFAULT_RPC_URLS, type TxPlan } from "../protocol"
 import { ethereumMainnet } from "../protocol/chains"
@@ -28,51 +37,22 @@ export type SigningKey = {
   source: string
 }
 
-type Eip1193Provider = {
-  request: (args: { method: string; params?: readonly unknown[] | object }) => Promise<unknown>
-}
-
-type SafeProtocolKitLike = {
-  isOwner(owner: string): Promise<boolean>
-  createTransaction(input: { transactions: Array<{ data: string; to: string; value: string }> }): Promise<unknown>
-  signTransaction(transaction: unknown): Promise<{
-    data: unknown
-    encodedSignatures: () => string
-  }>
-  getTransactionHash(transaction: unknown): Promise<string>
-  getThreshold(): Promise<number>
-  getChainId(): Promise<bigint>
-  executeTransaction(
-    transaction: unknown,
-  ): Promise<{ hash: string; transactionResponse?: { wait?: () => Promise<any> } }>
-}
-
-type SafeApiKitLike = {
-  proposeTransaction(input: {
-    origin?: string
-    safeAddress: string
-    safeTransactionData: unknown
-    safeTxHash: string
-    senderAddress: string
-    senderSignature: string
-  }): Promise<void>
-  confirmTransaction(safeTxHash: string, signature: string): Promise<unknown>
-  getTransaction(safeTxHash: string): Promise<unknown>
-  getTransactionConfirmations(safeTxHash: string): Promise<unknown>
-}
+type SafeInfoReader = (input: { safeAddress: Address; signerAddress: Address; rpcUrl?: string }) => Promise<{
+  isOwner: boolean
+  threshold: number
+}>
 
 export type SendPlanOptions = {
   privateKey: Hex
   rpcUrl?: string
   safeApiKeys?: readonly string[]
   safeTxServiceUrl?: string
-  safeProvider?: string | Eip1193Provider
-  createSafeApiKit?: (config: { apiKey?: string; chainId: bigint; txServiceUrl?: string }) => SafeApiKitLike
-  createSafeProtocolKit?: (config: {
-    provider: string | Eip1193Provider
-    signer: Hex
-    safeAddress: string
-  }) => Promise<SafeProtocolKitLike>
+  createSafeInfoReader?: SafeInfoReader
+  createSafeTxService?: (config: { apiKey?: string; txServiceUrl?: string }) => SafeLiteTxService
+  safePublicClient?: PublicClient
+  sendSafeTransaction?: SafeLiteSendTransaction
+  signSafeHash?: SafeLiteSignHash
+  waitForSafeReceipt?: SafeLiteWaitForReceipt
   onSubmitted?: (label: string, hash: Hex) => void
   onConfirmed?: (label: string, blockNumber: bigint) => void
 }
@@ -208,12 +188,10 @@ export async function selectSafeSigningKey(
     safeAddress: Address
     preferredSigner?: Address
     rpcUrl?: string
-    safeProvider?: string | Eip1193Provider
-    createSafeProtocolKit?: SendPlanOptions["createSafeProtocolKit"]
+    createSafeInfoReader?: SafeInfoReader
   },
 ): Promise<SigningKey> {
-  const protocolFactory = options.createSafeProtocolKit ?? Safe.init
-  const provider = options.safeProvider ?? options.rpcUrl ?? DEFAULT_RPC_URLS[0]
+  const readInfo = options.createSafeInfoReader ?? createDefaultSafeInfoReader
 
   if (options.preferredSigner) {
     const preferredSigner = options.preferredSigner
@@ -224,12 +202,12 @@ export async function selectSafeSigningKey(
         `Signer ${preferredSigner} is not present in the configured keyring. Available signers: ${available}.`,
       )
     }
-    const protocolKit = await protocolFactory({
-      provider,
-      signer: key.privateKey,
+    const info = await readInfo({
       safeAddress: options.safeAddress,
+      signerAddress: key.address,
+      rpcUrl: options.rpcUrl,
     })
-    if (!(await protocolKit.isOwner(key.address))) {
+    if (!info.isOwner) {
       throw new Error(`Signer ${key.address} is not an owner of Safe ${options.safeAddress}.`)
     }
     return key
@@ -237,12 +215,12 @@ export async function selectSafeSigningKey(
 
   const owners: SigningKey[] = []
   for (const key of keys) {
-    const protocolKit = await protocolFactory({
-      provider,
-      signer: key.privateKey,
+    const info = await readInfo({
       safeAddress: options.safeAddress,
+      signerAddress: key.address,
+      rpcUrl: options.rpcUrl,
     })
-    if (await protocolKit.isOwner(key.address)) owners.push(key)
+    if (info.isOwner) owners.push(key)
   }
 
   if (owners.length === 1) return owners[0]
@@ -255,6 +233,19 @@ export async function selectSafeSigningKey(
   throw new Error(
     `Multiple configured signers can operate Safe ${options.safeAddress}: ${candidates}. Use --signer <address> or SAFECAFE_CLI_SIGNER_ADDRESS to choose one.`,
   )
+}
+
+async function createDefaultSafeInfoReader(input: {
+  safeAddress: Address
+  signerAddress: Address
+  rpcUrl?: string
+}): Promise<{ isOwner: boolean; threshold: number }> {
+  const info = await readSafeLiteAccount({
+    client: createSafenetPublicClient(input.rpcUrl),
+    safeAddress: input.safeAddress,
+    signerAddress: input.signerAddress,
+  })
+  return { isOwner: info.isOwner, threshold: info.threshold }
 }
 
 export function printPlan(plan: TxPlan) {
@@ -304,74 +295,70 @@ export async function sendSafePlanTransactions(plan: TxPlan, options: SendPlanOp
 
   const signer = privateKeyToAccount(options.privateKey)
   const rpcUrl = options.rpcUrl || DEFAULT_RPC_URLS[0]
-  const provider = options.safeProvider ?? rpcUrl
-  const protocolKit = await (options.createSafeProtocolKit ?? Safe.init)({
-    provider,
-    signer: options.privateKey,
+  const publicClient = options.safePublicClient ?? createSafenetPublicClient(rpcUrl)
+  const safeInfo = await readSafeLiteAccount({
+    client: publicClient,
     safeAddress: plan.account,
+    signerAddress: signer.address,
   })
 
-  if (!(await protocolKit.isOwner(signer.address))) {
+  if (!safeInfo.isOwner) {
     throw new Error(`Signing key ${signer.address} is not an owner of Safe ${plan.account}.`)
   }
 
-  const transactions = plan.txs.map((tx) => ({
-    data: tx.data,
-    to: tx.to,
-    value: tx.value.toString(),
-  }))
-  const safeTransaction = await protocolKit.createTransaction({ transactions })
-  const signedTransaction = await protocolKit.signTransaction(safeTransaction as any)
-  const safeTxHash = await protocolKit.getTransactionHash(signedTransaction as any)
-  const threshold = await protocolKit.getThreshold()
-
-  if (threshold <= 1) {
-    const result = await protocolKit.executeTransaction(signedTransaction as any)
-    options.onSubmitted?.(plan.title, result.hash as Hex)
-    const receipt = await waitForSafeResultReceipt(result)
-    if (!receipt || receipt.status !== "success") throw new Error(`Transaction failed: ${plan.title}`)
-    options.onConfirmed?.(plan.title, receipt.blockNumber)
-    return { mode: "safe-executed", safeTxHash, threshold }
-  }
-
-  const apiKit = (options.createSafeApiKit ?? ((config) => new SafeApiKit(config)))({
+  const txService = (options.createSafeTxService ?? createDefaultSafeTxService)({
     apiKey: selectSafeApiKey(options.safeApiKeys),
-    chainId: await protocolKit.getChainId(),
     txServiceUrl: options.safeTxServiceUrl,
   })
-  const senderSignature = signedTransaction.encodedSignatures()
-  const existing = await findExistingSafeTransaction(apiKit, safeTxHash)
+  const result = await submitSafeLitePlan({
+    client: publicClient,
+    origin: "Safecafe CLI",
+    safeAddress: plan.account,
+    signerAddress: signer.address,
+    txService,
+    txs: plan.txs,
+    signHash:
+      options.signSafeHash ??
+      (async (safeTxHash) =>
+        normalizeSafeLitePersonalSignature(await signer.signMessage({ message: { raw: safeTxHash } }))),
+    sendTransaction:
+      options.sendSafeTransaction ??
+      (async (transaction, tx) => {
+        const walletClient = createWalletClient({
+          account: signer,
+          chain: ethereumMainnet,
+          transport: http(rpcUrl),
+        })
+        const hash = await walletClient.sendTransaction({
+          account: signer,
+          chain: ethereumMainnet,
+          to: transaction.to,
+          data: transaction.data,
+          value: transaction.value,
+        })
+        options.onSubmitted?.(tx.label, hash)
+        return hash
+      }),
+    waitForReceipt:
+      options.waitForSafeReceipt ??
+      (async (hash, tx) => {
+        const receipt = await publicClient.waitForTransactionReceipt({ hash })
+        assertSuccessfulReceipt(tx.label, receipt)
+        options.onConfirmed?.(tx.label, receipt.blockNumber)
+        return receipt
+      }),
+  })
 
-  if (!existing) {
-    await apiKit.proposeTransaction({
-      origin: "Safecafe CLI",
-      safeAddress: plan.account,
-      safeTransactionData: signedTransaction.data,
-      safeTxHash,
-      senderAddress: signer.address,
-      senderSignature,
-    })
-  } else if (!(await hasOwnerConfirmation(apiKit, safeTxHash, signer.address))) {
-    await apiKit.confirmTransaction(safeTxHash, senderSignature)
-  }
-
-  const confirmations = await countSafeConfirmations(apiKit, safeTxHash)
-  if (confirmations < threshold) {
+  if (result.mode === "proposed") {
     return {
       mode: "safe-proposed",
-      confirmations,
-      safeTxHash,
-      threshold,
+      confirmations: result.confirmations,
+      safeTxHash: result.safeTxHash,
+      threshold: result.threshold,
     }
   }
 
-  const transaction = await apiKit.getTransaction(safeTxHash)
-  const result = await protocolKit.executeTransaction(transaction as any)
-  options.onSubmitted?.(plan.title, result.hash as Hex)
-  const receipt = await waitForSafeResultReceipt(result)
-  if (!receipt || receipt.status !== "success") throw new Error(`Transaction failed: ${plan.title}`)
-  options.onConfirmed?.(plan.title, receipt.blockNumber)
-  return { mode: "safe-executed", safeTxHash, threshold }
+  return { mode: "safe-executed", safeTxHash: result.safeTxHash, threshold: result.threshold }
 }
 
 function selectSafeApiKey(keys: readonly string[] | undefined) {
@@ -379,50 +366,15 @@ function selectSafeApiKey(keys: readonly string[] | undefined) {
   return available[0]
 }
 
-export function assertSuccessfulReceipt(label: string, receipt: { status?: string; blockNumber: bigint }) {
-  if (receipt.status !== "success") throw new Error(`Transaction failed: ${label}`)
-}
-
-async function findExistingSafeTransaction(apiKit: SafeApiKitLike, safeTxHash: string) {
-  try {
-    return await apiKit.getTransaction(safeTxHash)
-  } catch {
-    return null
-  }
-}
-
-async function hasOwnerConfirmation(apiKit: SafeApiKitLike, safeTxHash: string, owner: string) {
-  const confirmations = await apiKit.getTransactionConfirmations(safeTxHash)
-  const results = getListResults(confirmations)
-  return results.some((item) => {
-    if (!item || typeof item !== "object") return false
-    const currentOwner = (item as { owner?: unknown }).owner
-    return typeof currentOwner === "string" && currentOwner.toLowerCase() === owner.toLowerCase()
+function createDefaultSafeTxService(config: { apiKey?: string; txServiceUrl?: string }) {
+  return new DirectSafeTxServiceClient({
+    apiKey: config.apiKey,
+    baseUrl: config.txServiceUrl?.trim() || safeTxServiceUrl(1n),
   })
 }
 
-async function countSafeConfirmations(apiKit: SafeApiKitLike, safeTxHash: string) {
-  const confirmations = await apiKit.getTransactionConfirmations(safeTxHash)
-  return getListResults(confirmations).length
-}
-
-function getListResults(value: unknown) {
-  if (!value || typeof value !== "object") return []
-  const results = (value as { results?: unknown }).results
-  return Array.isArray(results) ? results : []
-}
-
-async function waitForSafeResultReceipt(result: { transactionResponse?: unknown }) {
-  const response = result.transactionResponse
-  if (!response || typeof response !== "object") return null
-  const wait = (response as { wait?: unknown }).wait
-  if (typeof wait !== "function") return null
-  return await wait.call(response)
-}
-
-function readDefaultPrivateKey(env: Record<string, string | undefined>) {
-  const keys = readDefaultSigningKeys(env)
-  return keys.length ? keys[0].privateKey : null
+export function assertSuccessfulReceipt(label: string, receipt: { status?: string; blockNumber: bigint }) {
+  if (receipt.status !== "success") throw new Error(`Transaction failed: ${label}`)
 }
 
 function readDefaultSigningKeys(env: Record<string, string | undefined>) {

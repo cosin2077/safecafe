@@ -30,6 +30,8 @@ export type SafeProposalSummary = {
   safeTxHash: string
   status: "executed" | "pending"
   threshold: number
+  txIndex?: number
+  txLabel?: string
 }
 
 export function reconcileTxPlanForExecution(

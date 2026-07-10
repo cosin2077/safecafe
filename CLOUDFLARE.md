@@ -75,6 +75,7 @@ Configure these environment variables before enabling live account reads, authen
 - `SAFECAFE_LLM_TIMEOUT_MS` and `SAFECAFE_LLM_MAX_TOKENS` (optional): server-side Agent request bounds.
 - `SAFECAFE_AGENT_DAILY_LIMIT` (optional): daily `/api/agent` quota per signer wallet address. Default: `100`; `0` disables the quota.
 - `SAFECAFE_AGENT_FEEDBACK_DAILY_LIMIT` (optional): daily `/api/agent/feedback` quota per signer or client IP. Default: `20`; `0` disables the quota.
+- `SAFECAFE_AGENT_FEEDBACK_GLOBAL_DAILY_LIMIT` (optional): daily global accepted feedback cap. Default: `100`; `0` disables the quota.
 - `SAFECAFE_API_IP_RATE_LIMIT_PER_MINUTE` (optional): global fallback IP limit for Pages Functions. Default: `120`; `0` disables this fallback.
 - `SAFECAFE_AGENT_IP_RATE_LIMIT_PER_MINUTE` (optional): IP limit for `/api/agent`. Default: `20`; `0` disables it.
 - `SAFECAFE_AGENT_FEEDBACK_IP_RATE_LIMIT_PER_MINUTE` (optional): IP limit for `/api/agent/feedback`. Default: `20`; `0` disables it.
@@ -87,9 +88,9 @@ Configure these environment variables before enabling live account reads, authen
 
 The Agent daily quota is intentionally lightweight and in-memory. It is enough for basic abuse control, but counters can reset when Cloudflare starts a new isolate.
 
-For Staking Agent feedback collection, optionally bind a KV namespace named `SAFECAFE_AGENT_FEEDBACK_KV`. Feedback collection is available even before Agent wallet eligibility is unlocked, so users can report blocked or confusing states. If the binding is not configured, feedback is recorded only in structured Pages Function logs. You can also set `SAFECAFE_AGENT_FEEDBACK_DAILY_LIMIT` to cap feedback submissions per signer or client IP.
+For Staking Agent feedback collection, optionally bind a KV namespace named `SAFECAFE_AGENT_FEEDBACK_KV`. Feedback collection is available even before Agent wallet eligibility is unlocked, so users can report blocked or confusing states. If the binding is not configured, feedback is recorded only in structured Pages Function logs. You can also set `SAFECAFE_AGENT_FEEDBACK_DAILY_LIMIT` to cap feedback submissions per signer or client IP, and `SAFECAFE_AGENT_FEEDBACK_GLOBAL_DAILY_LIMIT` to cap total accepted feedback per UTC day.
 
-Cloudflare Workers KV has a Free plan tier that is enough for initial Safecafe feedback collection: Cloudflare currently documents 100,000 reads/day, 1,000 writes/day, and 1 GB stored data on the Free plan. Feedback collection writes one small record per submitted feedback item, so it is safe to start on the free tier and watch usage before considering paid storage.
+Cloudflare Workers KV has a Free plan tier that is enough for initial Safecafe feedback collection: Cloudflare currently documents 100,000 reads/day, 1,000 writes/day, and 1 GB stored data on the Free plan. Feedback collection writes one small record per submitted feedback item, so it is safe to start on the free tier and watch usage before considering paid storage. Raw records are stored as `feedback:raw:YYYY-MM-DD:<uuid>`; future offline or admin-triggered summaries can write `feedback:summary:YYYY-MM-DD` after deduplication, without calling an LLM inside the user request path.
 
 To deploy the optional feedback KV binding:
 

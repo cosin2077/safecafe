@@ -17,11 +17,12 @@ const pk1 = `0x${"11".repeat(32)}`
 const pk2 = `0x${"22".repeat(32)}`
 const owner1 = privateKeyToAccount(pk1).address
 const owner2 = privateKeyToAccount(pk2).address
+const enoughAllowance = 10n * 10n ** 18n
 
 const plan = {
   ...planStake({
     account: safeAddress,
-    allowance: 0n,
+    allowance: enoughAllowance,
     amount: "10",
     validator: "0xCc00DE0eA14c08669b26DcBFE365dBD9890B04D9",
   }),
@@ -31,80 +32,38 @@ const plan = {
 const txState = {
   confirmations: new Map(),
   executed: 0,
-  transactionHash: "0xabc123",
+  nonce: 0n,
+  transactionHash: `0x${"ab".repeat(32)}`,
 }
 
-function createProtocolKitFactory() {
-  return async ({ signer }) => {
-    const ownerAddress = privateKeyToAccount(signer).address
-    return {
-      async createTransaction({ transactions }) {
-        return {
-          data: { txs: transactions },
-          encodedSignatures() {
-            return `${ownerAddress}:sig`
-          },
-        }
-      },
-      async executeTransaction(transaction) {
-        txState.executed += 1
-        return {
-          hash: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-          transactionResponse: {
-            async wait() {
-              return {
-                blockNumber: 123n,
-                status: "success",
-                transaction,
-              }
-            },
-          },
-        }
-      },
-      async getChainId() {
-        return 1n
-      },
-      async getThreshold() {
-        return 2
-      },
-      async getTransactionHash() {
-        return txState.transactionHash
-      },
-      async isOwner(address) {
-        return address === owner1 || address === owner2
-      },
-      async signTransaction(transaction) {
-        return {
-          data: transaction.data,
-          encodedSignatures() {
-            return `${ownerAddress}:sig`
-          },
-          ownerAddress,
-          signatures: new Map([[ownerAddress, `${ownerAddress}:sig`]]),
-        }
-      },
-    }
-  }
+const safePublicClient = {
+  async getChainId() {
+    return 1
+  },
+  async readContract({ functionName }) {
+    if (functionName === "getOwners") return [owner1, owner2]
+    if (functionName === "getThreshold") return 2n
+    if (functionName === "nonce") return txState.nonce
+    if (functionName === "getTransactionHash") return txState.transactionHash
+    throw new Error(`Unexpected Safe read: ${functionName}`)
+  },
 }
 
-function createApiKitFactory() {
+function createTxService() {
   return {
     async confirmTransaction(safeTxHash, signature) {
       assert.equal(safeTxHash, txState.transactionHash)
-      const [owner] = String(signature).split(":")
+      const owner = signature === signatureFor(owner1) ? owner1 : owner2
       txState.confirmations.set(owner, signature)
       return { signature }
     },
-    async getTransaction(safeTxHash) {
-      assert.equal(safeTxHash, txState.transactionHash)
-      if (!txState.confirmations.size) throw new Error("Not found")
-      return {
-        confirmations: [...txState.confirmations.entries()].map(([owner, signature]) => ({ owner, signature })),
-        nonce: "0",
-      }
-    },
     async getTransactionConfirmations(safeTxHash) {
       assert.equal(safeTxHash, txState.transactionHash)
+      if (!txState.confirmations.size) {
+        const error = new Error("Not found")
+        error.code = "safe_tx_service_not_found"
+        throw error
+      }
       return {
         results: [...txState.confirmations.entries()].map(([owner, signature]) => ({ owner, signature })),
       }
@@ -116,15 +75,28 @@ function createApiKitFactory() {
   }
 }
 
-const factory = createProtocolKitFactory()
-const apiKit = createApiKitFactory()
+function signatureFor(owner) {
+  const seed = owner.slice(2).padEnd(128, "0").slice(0, 128)
+  return `0x${seed}1f`
+}
+
+function safeInfoReader({ signerAddress }) {
+  return Promise.resolve({
+    isOwner:
+      signerAddress.toLowerCase() === owner1.toLowerCase() || signerAddress.toLowerCase() === owner2.toLowerCase(),
+    threshold: 2,
+  })
+}
+
+const txService = createTxService()
 
 const first = await sendSafePlanTransactions(plan, {
-  createSafeApiKit() {
-    return apiKit
+  createSafeTxService() {
+    return txService
   },
-  createSafeProtocolKit: factory,
   privateKey: pk1,
+  safePublicClient,
+  signSafeHash: () => Promise.resolve(signatureFor(owner1)),
 })
 
 assert.deepEqual(first, {
@@ -135,12 +107,25 @@ assert.deepEqual(first, {
 })
 assert.equal(txState.executed, 0)
 
+const submitted = []
+const confirmed = []
 const second = await sendSafePlanTransactions(plan, {
-  createSafeApiKit() {
-    return apiKit
+  createSafeTxService() {
+    return txService
   },
-  createSafeProtocolKit: factory,
   privateKey: pk2,
+  safePublicClient,
+  sendSafeTransaction: async (_transaction, tx) => {
+    txState.executed += 1
+    submitted.push(tx.label)
+    return `0x${"ee".repeat(32)}`
+  },
+  signSafeHash: () => Promise.resolve(signatureFor(owner2)),
+  waitForSafeReceipt: async (_hash, tx) => {
+    txState.nonce += 1n
+    confirmed.push(tx.label)
+    return { blockNumber: 123n, status: "success" }
+  },
 })
 
 assert.deepEqual(second, {
@@ -149,6 +134,64 @@ assert.deepEqual(second, {
   threshold: 2,
 })
 assert.equal(txState.executed, 1)
+assert.deepEqual(submitted, ["Stake SAFE to validator"])
+assert.deepEqual(confirmed, ["Stake SAFE to validator"])
+
+let directTxServiceCalls = 0
+let directSignCount = 0
+let directSubmitted = 0
+let directConfirmed = 0
+const directResult = await sendSafePlanTransactions(plan, {
+  createSafeTxService() {
+    return {
+      async confirmTransaction() {
+        directTxServiceCalls += 1
+      },
+      async getTransactionConfirmations() {
+        directTxServiceCalls += 1
+        return { results: [] }
+      },
+      async proposeTransaction() {
+        directTxServiceCalls += 1
+      },
+    }
+  },
+  privateKey: pk1,
+  safePublicClient: {
+    async getChainId() {
+      return 1
+    },
+    async readContract({ functionName }) {
+      if (functionName === "getOwners") return [owner1]
+      if (functionName === "getThreshold") return 1n
+      if (functionName === "nonce") return 5n
+      if (functionName === "getTransactionHash") return txState.transactionHash
+      throw new Error(`Unexpected direct Safe read: ${functionName}`)
+    },
+  },
+  sendSafeTransaction: async () => {
+    directSubmitted += 1
+    return `0x${"ed".repeat(32)}`
+  },
+  signSafeHash: async () => {
+    directSignCount += 1
+    return signatureFor(owner1)
+  },
+  waitForSafeReceipt: async () => {
+    directConfirmed += 1
+    return { blockNumber: 124n, status: "success" }
+  },
+})
+
+assert.deepEqual(directResult, {
+  mode: "safe-executed",
+  safeTxHash: txState.transactionHash,
+  threshold: 1,
+})
+assert.equal(directTxServiceCalls, 0)
+assert.equal(directSignCount, 0)
+assert.equal(directSubmitted, 1)
+assert.equal(directConfirmed, 1)
 
 const tempDir = mkdtempSync(join(tmpdir(), "safecafe-cli-key-"))
 const keyFile = join(tempDir, "safe.key")
@@ -172,7 +215,7 @@ try {
   assert.equal(selectEoaSigningKey(keyring, owner2, owner2).privateKey, pk2)
 
   const ownerKey = await selectSafeSigningKey(keyring, {
-    createSafeProtocolKit: factory,
+    createSafeInfoReader: safeInfoReader,
     preferredSigner: owner1,
     safeAddress,
   })
@@ -181,7 +224,7 @@ try {
   await assert.rejects(
     () =>
       selectSafeSigningKey(keyring, {
-        createSafeProtocolKit: factory,
+        createSafeInfoReader: safeInfoReader,
         safeAddress,
       }),
     /Multiple configured signers can operate Safe/,
@@ -190,7 +233,7 @@ try {
   await assert.rejects(
     () =>
       selectSafeSigningKey(keyring, {
-        createSafeProtocolKit: factory,
+        createSafeInfoReader: safeInfoReader,
         preferredSigner: "0x3333333333333333333333333333333333333333",
         safeAddress,
       }),

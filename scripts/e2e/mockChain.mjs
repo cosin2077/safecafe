@@ -57,6 +57,8 @@ const safeAccountAbi = parseAbi([
   "function getOwners() view returns (address[])",
   "function getThreshold() view returns (uint256)",
   "function isOwner(address owner) view returns (bool)",
+  "function nonce() view returns (uint256)",
+  "function getTransactionHash(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,uint256 _nonce) view returns (bytes32)",
   "function execTransaction(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,bytes signatures) payable returns (bool success)",
 ])
 
@@ -75,6 +77,7 @@ export function createMockChain(seed = {}) {
     safeBalance: seed.safeBalance ?? 100n * eth,
     safes: seed.safes ?? ["0x1111111111111111111111111111111111111111"],
     safeOwners: (seed.safeOwners ?? [defaultAccount]).map((owner) => getAddress(owner)),
+    safeNonce: seed.safeNonce ?? 0n,
     safeThreshold: seed.safeThreshold ?? 1n,
     safeProposals: new Map(),
     agentRequests: 0,
@@ -245,6 +248,71 @@ export function createMockChain(seed = {}) {
         })),
       }),
     })
+  }
+
+  async function fulfillSafeTxService(route) {
+    const body = await route.request().postDataJSON()
+    try {
+      if (body.action === "confirmations") {
+        const proposal = state.safeProposals.get(body.safeTxHash)
+        if (!proposal) {
+          await route.fulfill({
+            status: 404,
+            contentType: "application/json",
+            body: JSON.stringify({
+              error: { code: "safe_tx_service_not_found", message: "Safe transaction was not found." },
+            }),
+          })
+          return
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            result: { results: [...proposal.confirmations.values()] },
+            requestId: "mock-safe-tx",
+          }),
+        })
+        return
+      }
+      if (body.action === "propose") {
+        proposeSafeTransaction(body)
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ result: {}, requestId: "mock-safe-tx" }),
+        })
+        return
+      }
+      if (body.action === "confirm") {
+        confirmSafeProposal(body.safeTxHash, body.signature, body.senderAddress)
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ result: {}, requestId: "mock-safe-tx" }),
+        })
+        return
+      }
+      if (body.action === "get") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ result: getSafeProposal(body.safeTxHash), requestId: "mock-safe-tx" }),
+        })
+        return
+      }
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { code: "invalid_request", message: "Unsupported Safe transaction action." } }),
+      })
+    } catch (error) {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { code: "safe_tx_service_failed", message: String(error?.message ?? error) } }),
+      })
+    }
   }
 
   async function fulfillRpc(route) {
@@ -434,6 +502,11 @@ export function createMockChain(seed = {}) {
     if (decoded.functionName === "getOwners") return encodeResult(safeAccountAbi, "getOwners", state.safeOwners)
     if (decoded.functionName === "getThreshold")
       return encodeResult(safeAccountAbi, "getThreshold", state.safeThreshold)
+    if (decoded.functionName === "nonce") return encodeResult(safeAccountAbi, "nonce", state.safeNonce)
+    if (decoded.functionName === "getTransactionHash") {
+      const nonce = decoded.args.at(-1)
+      return encodeResult(safeAccountAbi, "getTransactionHash", safeHashForNonce(nonce))
+    }
     if (decoded.functionName === "isOwner") {
       const [owner] = decoded.args
       return encodeResult(
@@ -464,61 +537,8 @@ export function createMockChain(seed = {}) {
       ({ account: injectedAccount }) => {
         const listeners = new Map()
         let txNonce = 0
-        const safeProposalHash = `0x${"ab".repeat(32)}`
         window.__mockWalletPersonalSignCount = 0
         window.__mockWalletTransactions = []
-        window.__safecafeSafeMultisigTestKit = {
-          createSafeApiKit() {
-            return {
-              async confirmTransaction(safeTxHash, signature) {
-                await window.safecafeConfirmMockSafeProposal({ safeTxHash, signature })
-                return { signature }
-              },
-              async getTransaction(safeTxHash) {
-                return window.safecafeGetMockSafeProposal(safeTxHash)
-              },
-              async getTransactionConfirmations(safeTxHash) {
-                return window.safecafeGetMockSafeProposalConfirmations(safeTxHash)
-              },
-              async proposeTransaction(input) {
-                await window.safecafeProposeMockSafeTransaction(input)
-              },
-            }
-          },
-          async createSafeProtocolKit({ safeAddress, signer }) {
-            return {
-              async createTransaction({ transactions }) {
-                return { data: { transactions }, safeAddress }
-              },
-              async executeTransaction(transaction) {
-                txNonce += 1
-                const hash = `0x${txNonce.toString(16).padStart(64, "0")}`
-                await window.safecafeApplyMockSafeProposal({ hash, transaction })
-                window.__mockWalletTransactions.push({
-                  hash,
-                  tx: { data: "0x", safeTransaction: transaction, to: safeAddress },
-                })
-                return { hash }
-              },
-              async getChainId() {
-                return 1n
-              },
-              async getThreshold() {
-                return window.safecafeGetMockSafeThreshold()
-              },
-              async getTransactionHash() {
-                return safeProposalHash
-              },
-              async isOwner(owner) {
-                return window.safecafeIsMockSafeOwner(owner)
-              },
-              async signHash() {
-                window.__mockWalletPersonalSignCount += 1
-                return { data: `${signer}:safe-signature` }
-              },
-            }
-          },
-        }
         window.ethereum = {
           request: async ({ method, params }) => {
             if (method === "eth_chainId") return "0x1"
@@ -527,7 +547,7 @@ export function createMockChain(seed = {}) {
             if (method === "wallet_switchEthereumChain") return null
             if (method === "personal_sign") {
               window.__mockWalletPersonalSignCount += 1
-              return `0x${"11".repeat(65)}`
+              return `0x${"11".repeat(64)}1b`
             }
             if (method === "eth_sendTransaction") {
               const tx = params?.[0]
@@ -587,10 +607,10 @@ export function createMockChain(seed = {}) {
     })
   }
 
-  function confirmSafeProposal(safeTxHash, signature) {
+  function confirmSafeProposal(safeTxHash, signature, ownerAddress) {
     const proposal = state.safeProposals.get(safeTxHash)
     if (!proposal) throw new Error(`Unknown Safe proposal ${safeTxHash}`)
-    const [owner] = String(signature).split(":")
+    const owner = ownerAddress ?? String(signature).split(":")[0]
     proposal.confirmations.set(getAddress(owner), {
       owner: getAddress(owner),
       signature,
@@ -628,6 +648,7 @@ export function createMockChain(seed = {}) {
       }
     }
     state.blockNumber += 1n
+    state.safeNonce += 1n
     receipts.set(hash, {
       blockHash: `0x${"aa".repeat(32)}`,
       blockNumber: numberToHex(state.blockNumber),
@@ -729,28 +750,31 @@ export function createMockChain(seed = {}) {
   function applySafeTransaction(account, decoded) {
     if (decoded.functionName !== "execTransaction")
       throw new Error(`Unsupported Safe transaction ${decoded.functionName}`)
-    const [to, value, data, operation] = decoded.args
+    const [to, value, data, operation, , , , , , signatures] = decoded.args
     ensure(
       state.safeOwners.some((owner) => isAddressEqual(owner, account)),
       "Signer is not Safe owner",
     )
-    ensure(state.safeThreshold === 1n, "Safe threshold requires multiple owners")
     ensure(operation === 0, "Only Safe CALL operation is supported")
     ensure(value === 0n, "Only zero-value Safe transactions are supported")
+    ensure(signatureCount(signatures) >= Number(state.safeThreshold), "Not enough Safe signatures")
     const safeAccount = state.safes[0]
     const nested = decodeKnownFunction(data)
     if (isAddressEqual(to, mockContracts.safeToken) && nested.functionName === "approve") {
       const [spender, amount] = nested.args
       ensure(isAddressEqual(spender, mockContracts.staking), "Only staking allowance is supported")
       state.stakingAllowance = amount
+      state.safeNonce += 1n
       return
     }
     if (isAddressEqual(to, mockContracts.staking)) {
       applyStakingTransaction(safeAccount, nested)
+      state.safeNonce += 1n
       return
     }
     if (isAddressEqual(to, mockContracts.merkleDrop)) {
       applyMerkleTransaction(safeAccount, nested)
+      state.safeNonce += 1n
       return
     }
     throw new Error(`Unsupported Safe nested target ${to}`)
@@ -771,6 +795,7 @@ export function createMockChain(seed = {}) {
     fulfillRewardProof,
     fulfillSafes,
     fulfillRpc,
+    fulfillSafeTxService,
     fulfillValidatorsApi,
     fulfillValidators,
     installWallet,
@@ -793,6 +818,16 @@ function decodeKnownFunction(data) {
 
 function encodeResult(abi, functionName, result) {
   return encodeFunctionResult({ abi, functionName, result })
+}
+
+function safeHashForNonce(nonce) {
+  const value = BigInt(nonce ?? 0n) + 0xabn
+  return `0x${value.toString(16).padStart(64, "0")}`
+}
+
+function signatureCount(signatures) {
+  const hex = typeof signatures === "string" ? signatures.slice(2) : ""
+  return Math.floor(hex.length / 130)
 }
 
 function ok(id, result) {

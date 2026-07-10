@@ -12,6 +12,7 @@ const stakingAbi = parseAbi([
 const safeAccountAbi = parseAbi([
   "function execTransaction(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,bytes signatures) payable returns (bool success)",
 ])
+const approvedSignature = `0x${"00".repeat(64)}01`
 
 const chain = createMockChain({ account, safeBalance: 2n * eth, stakingAllowance: 0n, coreStake: 1n * eth })
 
@@ -113,7 +114,7 @@ safeChain.applyTransaction(
         0n,
         getAddress("0x0000000000000000000000000000000000000000"),
         getAddress("0x0000000000000000000000000000000000000000"),
-        "0x",
+        approvedSignature,
       ],
     }),
     value: "0x0",
@@ -141,7 +142,7 @@ safeChain.applyTransaction(
         0n,
         getAddress("0x0000000000000000000000000000000000000000"),
         getAddress("0x0000000000000000000000000000000000000000"),
-        "0x",
+        approvedSignature,
       ],
     }),
     value: "0x0",

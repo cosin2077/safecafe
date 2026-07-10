@@ -16,7 +16,7 @@ import {
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast as sonnerToast, Toaster } from "sonner"
-import { type Address, createWalletClient, custom } from "viem"
+import { type Address, createWalletClient, custom, type Hex, isHex } from "viem"
 import type { UserLlmConfig } from "../agent"
 import {
   type AccountSnapshot,
@@ -104,7 +104,7 @@ import {
   navItems,
   type SafePriceState,
 } from "./types"
-import { ExternalActionButton, FullPanel, Metric } from "./ui"
+import { ConfirmDialog, ExternalActionButton, FullPanel, Metric } from "./ui"
 import { compareBigintDesc, findPreferredRestakeValidator } from "./validatorSelection"
 import { DashboardView, DocsView, RewardsView, ValidatorTable, ValidatorToolbar, WithdrawalsView } from "./views"
 import { createWalletIdentity, isSelfSubject, normalizeAddress } from "./walletIdentity"
@@ -129,7 +129,14 @@ type SubmitPlanOptions = {
   actionKey?: TxPlanAction | "claim-rewards-and-stake"
   alreadySubmitting?: boolean
   requireAuth?: boolean
+  safeMultisigNoticeAccepted?: boolean
   skipValidation?: boolean
+}
+type PendingSafeMultisigNotice = {
+  actionKey: TxPlanAction | "claim-rewards-and-stake"
+  plan: TxPlan
+  requireAuth: boolean
+  txCount: number
 }
 type RefreshedLiveAccountData = LiveReadResult
 type LiveDataMeta = { fetchedAt: number; source: "cache" | "live" }
@@ -248,6 +255,14 @@ function markSteps(
   return steps.map((step) => ({ ...step, status }))
 }
 
+function markCompletedSafeProposalSteps(
+  steps: ActionExecutionSummary["steps"],
+  completedTxs: number,
+): ActionExecutionSummary["steps"] {
+  if (completedTxs <= 0) return steps
+  return steps.map((step, index) => (index < completedTxs ? { ...step, status: "done" } : step))
+}
+
 function dashboardActionFromPath(pathname: string): DashboardAction {
   const normalized = pathname.replace(/\/+$/, "") || "/"
   if (normalized === "/unstake") return "unstake"
@@ -314,6 +329,7 @@ export function App() {
   const [txPlan, setTxPlan] = useState<TxPlan | null>(null)
   const [txExecution, setTxExecution] = useState<ActionExecutionSummary | null>(null)
   const [safeMultisigPlan, setSafeMultisigPlan] = useState<TxPlan | null>(null)
+  const [pendingSafeMultisigNotice, setPendingSafeMultisigNotice] = useState<PendingSafeMultisigNotice | null>(null)
   const [modal, setModal] = useState<Modal>(null)
   const [showOnlyActive, setShowOnlyActive] = useState(() => readStorageFlag(appStorageKeys.validatorsActiveOnly))
   const [validatorQuery, setValidatorQuery] = useState(() => readStorageText(appStorageKeys.validatorQuery) ?? "")
@@ -712,8 +728,18 @@ export function App() {
     }
   }, [t.priceUnavailable])
 
+  useEffect(() => {
+    if (!account || !subjectAccount || safeMultisigPlan || txExecution?.safeProposal) return
+    const restored = readStoredSafeProposal(account, subjectAccount)
+    if (!restored) return
+    setTxPlan(restored.plan)
+    setSafeMultisigPlan(restored.plan)
+    setTxExecution(restored.execution)
+  }, [account, safeMultisigPlan, subjectAccount, txExecution?.safeProposal])
+
   const updateAmount = useCallback((nextAmount: string) => {
     setAmount(nextAmount)
+    removeStoredSafeProposal()
     setSafeMultisigPlan(null)
     setTxPlan(null)
     setTxExecution(null)
@@ -722,6 +748,7 @@ export function App() {
   const updateValidator = useCallback((nextValidator: Address) => {
     setValidator(nextValidator)
     writeStorageAddress(appStorageKeys.selectedValidator, nextValidator)
+    removeStoredSafeProposal()
     setSafeMultisigPlan(null)
     setTxPlan(null)
     setTxExecution(null)
@@ -756,6 +783,7 @@ export function App() {
     setLiveBlock(null)
     setLiveDataMeta(null)
     setLiveError("")
+    setPendingSafeMultisigNotice(null)
     setSafeMultisigPlan(null)
     setTxPlan(null)
     setTxExecution(null)
@@ -1445,6 +1473,8 @@ export function App() {
       return
     }
     setAction(nextAction)
+    removeStoredSafeProposal()
+    setPendingSafeMultisigNotice(null)
     setSafeMultisigPlan(null)
     setTxPlan(null)
     setTxExecution(null)
@@ -1498,6 +1528,8 @@ export function App() {
       return
     }
     setAction("claim-rewards")
+    removeStoredSafeProposal()
+    setPendingSafeMultisigNotice(null)
     setSafeMultisigPlan(null)
     setTxPlan(null)
     setTxExecution(null)
@@ -1645,6 +1677,15 @@ export function App() {
         if (safeMode.kind === "not-owner") throw new Error(t.safeOwnerRequired)
         if (safeMode.kind === "multi-owner") {
           setSafeMultisigPlan(executablePlan)
+          if (executablePlan.txs.length > 1 && !options.safeMultisigNoticeAccepted) {
+            setPendingSafeMultisigNotice({
+              actionKey: executionAction,
+              plan: executablePlan,
+              requireAuth: options.requireAuth === true,
+              txCount: executablePlan.txs.length,
+            })
+            return
+          }
           await submitSafeMultisigProposal({
             authToken: userSafeApiKey ? null : (rpcAuthToken ?? (await ensureRpcAuthTokenForCurrentWallet())),
             executionAction,
@@ -1778,6 +1819,7 @@ export function App() {
       authToken: params.authToken,
       plan: params.plan,
       provider: window.ethereum,
+      rpcUrl: effectiveRpcUrl,
       safeAddress: subjectAccount,
       safeTxErrorMessages: {
         safe_api_key_invalid: t.safeApiKeyInvalid,
@@ -1789,6 +1831,8 @@ export function App() {
       userSafeApiKey,
     })
     if (result.mode === "executed") {
+      removeStoredSafeProposal()
+      setSafeMultisigPlan(null)
       setTxExecution(
         createExecutionState(params.executionAction, params.plan.title, markSteps(params.executionSteps, "done"), {
           status: "completed",
@@ -1798,11 +1842,12 @@ export function App() {
       await refreshLiveReads(subjectAccount, { forceRefresh: true })
       return
     }
-    const execution = createExecutionState(params.executionAction, params.plan.title, params.executionSteps, {
+    const executionSteps = markCompletedSafeProposalSteps(params.executionSteps, result.completedTxs)
+    const execution = createExecutionState(params.executionAction, params.plan.title, executionSteps, {
       errorMessage: t.safeProposalWaiting,
       status: "partial",
     })
-    setTxExecution({
+    const nextExecution: ActionExecutionSummary = {
       ...execution,
       safeProposal: {
         confirmations: result.confirmations,
@@ -1810,7 +1855,16 @@ export function App() {
         safeTxHash: result.safeTxHash,
         status: "pending",
         threshold: result.threshold || params.threshold,
+        txIndex: result.txIndex,
+        txLabel: result.txLabel,
       },
+    }
+    setTxExecution(nextExecution)
+    writeStoredSafeProposal({
+      execution: nextExecution,
+      plan: params.plan,
+      safeAddress: subjectAccount,
+      signer: account,
     })
     toast(`${t.safeProposalCreated} (${result.confirmations}/${result.threshold || params.threshold})`, "success")
   }
@@ -1824,6 +1878,7 @@ export function App() {
     void submitPlan(safeMultisigPlan, {
       actionKey: executionAction,
       requireAuth: true,
+      safeMultisigNoticeAccepted: true,
       skipValidation: true,
     })
   }
@@ -1850,7 +1905,12 @@ export function App() {
             }),
       )
       setTxProgress(`${t.simulationStatus}: ${label}`)
-      const safeTx = buildSafeExecTransaction({ safe: subjectAccount, signer: account, tx })
+      const safeTx = await buildSafeExecTransaction({
+        client: params.publicClient,
+        safe: subjectAccount,
+        signer: account,
+        tx,
+      })
       try {
         await params.publicClient.call({
           account,
@@ -1951,6 +2011,8 @@ export function App() {
     ) {
       updateDashboardAction(nextAction)
     }
+    removeStoredSafeProposal()
+    setPendingSafeMultisigNotice(null)
     setSafeMultisigPlan(null)
     setTxPlan(null)
     setTxExecution(null)
@@ -1976,6 +2038,8 @@ export function App() {
     if (nextAction === "stake" || nextAction === "unstake" || nextAction === "claim-rewards") {
       updateDashboardAction(nextAction)
     }
+    removeStoredSafeProposal()
+    setPendingSafeMultisigNotice(null)
     setSafeMultisigPlan(null)
     setTxPlan(null)
     setTxExecution(null)
@@ -2470,6 +2534,25 @@ export function App() {
           t={t}
         />
       )}
+      {pendingSafeMultisigNotice && (
+        <ConfirmDialog
+          cancelLabel={t.closeDialog}
+          confirmLabel={t.safeProposalContinue}
+          message={t.safeMultisigFlowNoticeBody.replace("{count}", pendingSafeMultisigNotice.txCount.toString())}
+          onCancel={() => setPendingSafeMultisigNotice(null)}
+          onConfirm={() => {
+            const pending = pendingSafeMultisigNotice
+            setPendingSafeMultisigNotice(null)
+            void submitPlan(pending.plan, {
+              actionKey: pending.actionKey,
+              requireAuth: pending.requireAuth,
+              safeMultisigNoticeAccepted: true,
+              skipValidation: true,
+            })
+          }}
+          title={t.safeMultisigFlowNoticeTitle}
+        />
+      )}
       <Toaster
         closeButton
         richColors
@@ -2754,6 +2837,200 @@ function calculateEstimatedAnnualRewards(totalStaked: bigint, apyPercent: number
 
 function formatPercentOrDash(value: number | null) {
   return value === null ? "-" : `${value.toFixed(2)}%`
+}
+
+type SerializedTxPlan = {
+  account?: string
+  action: string
+  simulation?: { message: string; simulatedTxs: number; status: string }
+  title: string
+  txs: Array<{ data: string; label: string; to: string; value: string }>
+  warnings: string[]
+}
+
+type StoredSafeProposal = {
+  execution: ActionExecutionSummary
+  plan: SerializedTxPlan
+  safeAddress: string
+  savedAt: number
+  signer: string
+  version: 1
+}
+
+function writeStoredSafeProposal(input: {
+  execution: ActionExecutionSummary
+  plan: TxPlan
+  safeAddress: Address
+  signer: Address
+}) {
+  writeStorageJson(appStorageKeys.safeProposal, {
+    execution: input.execution,
+    plan: serializeTxPlan(input.plan),
+    safeAddress: input.safeAddress,
+    savedAt: Date.now(),
+    signer: input.signer,
+    version: 1,
+  } satisfies StoredSafeProposal)
+}
+
+function readStoredSafeProposal(signer: Address, safeAddress: Address) {
+  return readStorageJson(appStorageKeys.safeProposal, (value) => {
+    const record = typeof value === "object" && value !== null ? (value as Partial<StoredSafeProposal>) : null
+    if (record?.version !== 1) return null
+    const storedSigner = normalizeAddress(record.signer)
+    const storedSafe = normalizeAddress(record.safeAddress)
+    if (!storedSigner || !storedSafe) return null
+    if (!isSameAddress(storedSigner, signer) || !isSameAddress(storedSafe, safeAddress)) return null
+    const plan = readSerializedTxPlan(record.plan)
+    const execution = readStoredExecution(record.execution, storedSafe)
+    if (!plan || !execution) return null
+    return { execution, plan }
+  })
+}
+
+function removeStoredSafeProposal() {
+  removeStorageValue(appStorageKeys.safeProposal)
+}
+
+function serializeTxPlan(plan: TxPlan): SerializedTxPlan {
+  return {
+    account: plan.account,
+    action: plan.action,
+    simulation: plan.simulation,
+    title: plan.title,
+    txs: plan.txs.map((tx) => ({
+      data: tx.data,
+      label: tx.label,
+      to: tx.to,
+      value: tx.value.toString(),
+    })),
+    warnings: plan.warnings,
+  }
+}
+
+function readSerializedTxPlan(value: unknown): TxPlan | null {
+  const record = typeof value === "object" && value !== null ? (value as Partial<SerializedTxPlan>) : null
+  if (!record || !isTxPlanAction(record.action) || typeof record.title !== "string") return null
+  const account = record.account ? normalizeAddress(record.account) : undefined
+  if (record.account && !account) return null
+  const txs = Array.isArray(record.txs)
+    ? record.txs.flatMap((tx) => {
+        const item = typeof tx === "object" && tx !== null ? tx : null
+        if (!item) return []
+        const { data, label, to, value } = item as Partial<SerializedTxPlan["txs"][number]>
+        const address = normalizeAddress(to)
+        if (typeof label !== "string" || !address || typeof data !== "string" || !isHex(data)) return []
+        try {
+          return [{ data: data as Hex, label, to: address, value: BigInt(value ?? "") }]
+        } catch {
+          return []
+        }
+      })
+    : []
+  if (txs.length === 0 || txs.length !== record.txs?.length) return null
+  return {
+    account: account ?? undefined,
+    action: record.action,
+    simulation: readStoredSimulation(record.simulation),
+    title: record.title,
+    txs,
+    warnings: Array.isArray(record.warnings) ? record.warnings.filter((item) => typeof item === "string") : [],
+  }
+}
+
+function readStoredExecution(value: unknown, safeAddress: Address): ActionExecutionSummary | null {
+  const record = typeof value === "object" && value !== null ? (value as Partial<ActionExecutionSummary>) : null
+  if (!record || !isExecutionAction(record.action) || !isExecutionStatus(record.status)) return null
+  const steps = Array.isArray(record.steps)
+    ? record.steps.flatMap((step) => {
+        const item =
+          typeof step === "object" && step !== null
+            ? (step as { id?: unknown; label?: unknown; status?: unknown })
+            : null
+        return item &&
+          typeof item.id === "string" &&
+          typeof item.label === "string" &&
+          isExecutionStepStatus(item.status)
+          ? [{ id: item.id, label: item.label, status: item.status }]
+          : []
+      })
+    : []
+  const proposal = readStoredSafeProposalSummary(record.safeProposal, safeAddress)
+  if (steps.length === 0 || !proposal) return null
+  return {
+    action: record.action,
+    actionKey: record.action,
+    completedCount: Number(record.completedCount) || 0,
+    currentLabel: typeof record.currentLabel === "string" ? record.currentLabel : null,
+    errorMessage: typeof record.errorMessage === "string" ? record.errorMessage : "",
+    pendingCount: Number(record.pendingCount) || 0,
+    safeProposal: proposal,
+    skippedCount: Number(record.skippedCount) || 0,
+    status: record.status,
+    steps,
+    title: typeof record.title === "string" ? record.title : "",
+    userRejected: record.userRejected === true,
+  }
+}
+
+function readStoredSafeProposalSummary(
+  value: unknown,
+  expectedSafeAddress: Address,
+): ActionExecutionSummary["safeProposal"] | null {
+  const record =
+    typeof value === "object" && value !== null
+      ? (value as Partial<NonNullable<ActionExecutionSummary["safeProposal"]>>)
+      : null
+  if (!record) return null
+  const safeAddress = normalizeAddress(record.safeAddress)
+  if (!safeAddress || !isSameAddress(safeAddress, expectedSafeAddress)) return null
+  if (typeof record.safeTxHash !== "string" || !isHex(record.safeTxHash)) return null
+  return {
+    confirmations: Number(record.confirmations) || 0,
+    safeAddress,
+    safeTxHash: record.safeTxHash,
+    status: record.status === "executed" ? "executed" : "pending",
+    threshold: Number(record.threshold) || 0,
+    txIndex: Number.isSafeInteger(record.txIndex) ? record.txIndex : undefined,
+    txLabel: typeof record.txLabel === "string" ? record.txLabel : undefined,
+  }
+}
+
+function readStoredSimulation(value: unknown): TxPlan["simulation"] {
+  const record =
+    typeof value === "object" && value !== null ? (value as Partial<NonNullable<TxPlan["simulation"]>>) : null
+  if (!record || !isSimulationStatus(record.status) || typeof record.message !== "string") return undefined
+  return {
+    message: record.message,
+    simulatedTxs: Number(record.simulatedTxs) || 0,
+    status: record.status,
+  }
+}
+
+function isTxPlanAction(value: unknown): value is TxPlanAction {
+  return (
+    value === "stake" ||
+    value === "unstake" ||
+    value === "claim-withdrawal" ||
+    value === "claim-rewards" ||
+    value === "agent-plan"
+  )
+}
+
+function isExecutionAction(value: unknown): value is ActionExecutionSummary["action"] {
+  return isTxPlanAction(value) || value === "claim-rewards-and-stake"
+}
+
+function isExecutionStatus(value: unknown): value is ActionExecutionSummary["status"] {
+  return value === "completed" || value === "failed" || value === "partial"
+}
+
+function isExecutionStepStatus(value: unknown): value is ActionExecutionSummary["steps"][number]["status"] {
+  return value === "cancelled" || value === "done" || value === "failed" || value === "pending" || value === "skipped"
+}
+
+function isSimulationStatus(value: unknown): value is NonNullable<TxPlan["simulation"]>["status"] {
+  return value === "failed" || value === "partial" || value === "passed"
 }
 
 function readStoredUserLlmConfig(): UserLlmConfig | null {

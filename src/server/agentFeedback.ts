@@ -7,6 +7,7 @@ import type { AgentFeedbackKv, RpcGatewayEnv } from "./serverEnv"
 export type AgentFeedbackEnv = RpcGatewayEnv & {
   SAFECAFE_AGENT_FEEDBACK_KV?: AgentFeedbackKv
   SAFECAFE_AGENT_FEEDBACK_DAILY_LIMIT?: string
+  SAFECAFE_AGENT_FEEDBACK_GLOBAL_DAILY_LIMIT?: string
 }
 
 export type AgentFeedbackCategory = "bug" | "complaint" | "feature_request" | "other" | "ux"
@@ -32,7 +33,9 @@ const maxOriginalTextChars = 2_000
 const maxSummaryChars = 240
 const maxAreaChars = 80
 const defaultFeedbackDailyLimit = 20
+const defaultFeedbackGlobalDailyLimit = 100
 const feedbackLimitBuckets = new Map<string, { count: number; resetAt: number }>()
+const feedbackGlobalLimitBuckets = new Map<string, { count: number; resetAt: number }>()
 
 export async function handleAgentFeedbackRequest(request: Request, env: AgentFeedbackEnv): Promise<Response> {
   const requestContext = createRequestContext(request, "agent.feedback")
@@ -48,9 +51,15 @@ export async function handleAgentFeedbackRequest(request: Request, env: AgentFee
     logServerEvent(requestContext, "warn", "agent.feedback.invalid", { reason: parsed.error, status: parsed.status })
     return json({ error: parsed.error }, parsed.status, requestContext)
   }
+  if (!hasRecordableFeedbackText(parsed.value)) {
+    const result = await collectAgentFeedback(parsed.value, env, requestContext)
+    return json(result, result.recorded ? 200 : 202, requestContext)
+  }
   const actor = await readOptionalFeedbackActor(request, env, parsed.value.context)
   const limited = enforceFeedbackDailyLimit(request, actor, env, requestContext)
   if (limited) return limited
+  const globalLimited = await enforceFeedbackGlobalDailyLimit(env, requestContext)
+  if (globalLimited) return globalLimited
   const result = await collectAgentFeedback(parsed.value, env, requestContext, actor)
   return json(result, result.recorded ? 200 : 202, requestContext)
 }
@@ -75,7 +84,7 @@ export async function collectAgentFeedback(
     subjectKind: actor.subjectKind ?? null,
   }
   if (env.SAFECAFE_AGENT_FEEDBACK_KV) {
-    const key = `feedback:${record.createdAt.slice(0, 10)}:${crypto.randomUUID()}`
+    const key = feedbackRawKey(record.createdAt.slice(0, 10))
     try {
       await env.SAFECAFE_AGENT_FEEDBACK_KV.put(key, JSON.stringify(record))
       logServerEvent(requestContext, "info", "agent.feedback.recorded", {
@@ -104,6 +113,74 @@ export async function collectAgentFeedback(
   return { recorded: true, storage: "log" as const }
 }
 
+async function enforceFeedbackGlobalDailyLimit(env: AgentFeedbackEnv, context: RequestContext) {
+  const limit = readBoundedInteger(
+    env.SAFECAFE_AGENT_FEEDBACK_GLOBAL_DAILY_LIMIT,
+    defaultFeedbackGlobalDailyLimit,
+    0,
+    10_000,
+  )
+  if (limit <= 0) return null
+  const now = Date.now()
+  const dateKey = utcDateKey(now)
+  const resetAt = nextUtcDayStartMs(now)
+  if (env.SAFECAFE_AGENT_FEEDBACK_KV?.list) {
+    try {
+      const count = await countKvFeedbackRecords(env.SAFECAFE_AGENT_FEEDBACK_KV, feedbackRawPrefix(dateKey), limit)
+      if (count >= limit) return feedbackGlobalLimitResponse(limit, resetAt, now, context)
+      return null
+    } catch (error) {
+      logServerEvent(context, "warn", "agent.feedback.global_limit_kv_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+  for (const [bucketKey, bucket] of feedbackGlobalLimitBuckets) {
+    if (bucket.resetAt <= now) feedbackGlobalLimitBuckets.delete(bucketKey)
+  }
+  const bucketKey = `feedback:global:${dateKey}`
+  const bucket = feedbackGlobalLimitBuckets.get(bucketKey)
+  if (!bucket || bucket.resetAt <= now) {
+    feedbackGlobalLimitBuckets.set(bucketKey, { count: 1, resetAt })
+    return null
+  }
+  if (bucket.count >= limit) return feedbackGlobalLimitResponse(limit, resetAt, now, context)
+  bucket.count += 1
+  return null
+}
+
+async function countKvFeedbackRecords(kv: AgentFeedbackKv, prefix: string, limit: number) {
+  let count = 0
+  let cursor: string | undefined
+  do {
+    const page = await kv.list?.({ cursor, limit: Math.min(1_000, limit - count), prefix })
+    if (!page) return count
+    count += page.keys.length
+    cursor = page.cursor
+    if (count >= limit || page.list_complete !== false) return count
+  } while (cursor)
+  return count
+}
+
+function feedbackGlobalLimitResponse(limit: number, resetAt: number, now: number, context: RequestContext) {
+  logServerEvent(context, "warn", "agent.feedback.global_rate_limited", {
+    limit,
+    resetAt: new Date(resetAt).toISOString(),
+  })
+  return json(
+    {
+      code: "agent_feedback_global_daily_limit_exceeded",
+      error: "Daily feedback collection limit reached. Please try again tomorrow.",
+      limit,
+      requestId: context.requestId,
+      resetAt: new Date(resetAt).toISOString(),
+    },
+    429,
+    context,
+    { "retry-after": String(Math.max(1, Math.ceil((resetAt - now) / 1000))) },
+  )
+}
+
 function sanitizeFeedbackInput(input: AgentFeedbackInput) {
   return {
     area: cleanText(input.area, maxAreaChars) || "agent",
@@ -112,6 +189,10 @@ function sanitizeFeedbackInput(input: AgentFeedbackInput) {
     severity: readFeedbackSeverity(input.severity),
     summary: redactSensitiveText(cleanText(input.summary, maxSummaryChars)),
   }
+}
+
+function hasRecordableFeedbackText(input: AgentFeedbackInput) {
+  return Boolean(cleanText(input.originalText, maxOriginalTextChars) || cleanText(input.summary, maxSummaryChars))
 }
 
 async function readFeedbackRequest(
@@ -236,6 +317,14 @@ function readBoundedInteger(value: string | undefined, fallback: number, min: nu
 
 function utcDateKey(now: number) {
   return new Date(now).toISOString().slice(0, 10)
+}
+
+function feedbackRawPrefix(dateKey: string) {
+  return `feedback:raw:${dateKey}:`
+}
+
+function feedbackRawKey(dateKey: string) {
+  return `${feedbackRawPrefix(dateKey)}${crypto.randomUUID()}`
 }
 
 function nextUtcDayStartMs(now: number) {

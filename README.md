@@ -97,10 +97,11 @@ The Staking Agent (`/api/agent`) uses an OpenAI-compatible LLM upstream for AI-p
 | `SAFECAFE_LLM_HEADER` | Optional identifier sent as `X-Service-Id` header to the upstream LLM for usage tracking. Leave empty to omit. |
 | `SAFECAFE_AGENT_DAILY_LIMIT` | Daily `/api/agent` quota per signer wallet address, counted after wallet access is eligible. Default: `100`; set `0` to disable. |
 | `SAFECAFE_AGENT_FEEDBACK_DAILY_LIMIT` | Optional daily `/api/agent/feedback` quota per signer or client IP. Default: `20`; set `0` to disable. |
+| `SAFECAFE_AGENT_FEEDBACK_GLOBAL_DAILY_LIMIT` | Daily global accepted feedback cap. Default: `100`; set `0` to disable. |
 
 The Agent quota is intentionally lightweight and in-memory. It is enough for basic abuse control, but counters can reset when a local server or Cloudflare isolate restarts.
 
-The Staking Agent can also collect user feedback when users report bugs, complain about UX, or suggest improvements. Bind an optional KV namespace named `SAFECAFE_AGENT_FEEDBACK_KV` to store feedback records. Without this binding, feedback is written to structured server logs only.
+The Staking Agent can also collect user feedback when users report bugs, complain about UX, or suggest improvements. Bind an optional KV namespace named `SAFECAFE_AGENT_FEEDBACK_KV` to store feedback records. Without this binding, feedback is written to structured server logs only. Raw feedback records use `feedback:raw:YYYY-MM-DD:<uuid>` keys; future offline summaries can use `feedback:summary:YYYY-MM-DD` without adding LLM work to the user request path.
 
 ### Safe Transaction Service
 

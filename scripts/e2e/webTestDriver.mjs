@@ -418,6 +418,7 @@ export async function installInternalApiMocks(page, chain) {
   await page.route("**/api/validators", (route) => chain.fulfillValidatorsApi(route))
   await page.route("**/api/rewards/proof?**", (route) => chain.fulfillRewardProof(route))
   await page.route("**/api/rpc/ethereum", (route) => chain.fulfillRpc(route))
+  await page.route("**/api/safe/transaction", (route) => chain.fulfillSafeTxService(route))
   await page.route("**/assets/validator-info.json", (route) => chain.fulfillValidators(route))
   await page.route("**/proofs/**", (route) => chain.fulfillRewardProof(route))
 }

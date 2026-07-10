@@ -1,4 +1,9 @@
 export type AgentFeedbackKv = {
+  list?(options?: { cursor?: string; limit?: number; prefix?: string }): Promise<{
+    cursor?: string
+    keys: Array<{ name: string }>
+    list_complete?: boolean
+  }>
   put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>
 }
 
@@ -27,5 +32,6 @@ export type RpcGatewayEnv = {
   SAFECAFE_AGENT_DAILY_LIMIT?: string
   SAFECAFE_AGENT_FEEDBACK_KV?: AgentFeedbackKv
   SAFECAFE_AGENT_FEEDBACK_DAILY_LIMIT?: string
+  SAFECAFE_AGENT_FEEDBACK_GLOBAL_DAILY_LIMIT?: string
   VITE_AGENT_AUTH?: string
 }
