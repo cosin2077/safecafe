@@ -4,7 +4,7 @@ Safecafe is a Vite app deployed primarily on Cloudflare Pages. The frontend rema
 
 The project has three deployment surfaces:
 
-- Cloudflare Pages: primary public mirror for normal user traffic, fast caching, SPA routing, and Pages Functions under `/api/*`.
+- Cloudflare Pages: primary public mirror for normal user traffic, fast caching, SPA routing, and Pages Functions under `/api/*`. The preferred hosted API origin is `https://safecafe.baserun.link`.
 - Filebase/IPFS: immutable release snapshot. Each published build gets a content-addressed CID and release records.
 - `safe-staking.eth`: ENS name whose contenthash points to the current IPFS release. It is already configured and can be checked through `https://safe-staking.eth.limo/`.
 
@@ -44,13 +44,14 @@ pnpm release
 
 The wizard:
 
-1. Requires a clean Git worktree and checks pnpm, Wrangler authentication, and Filebase credentials.
-2. Runs release checks and creates one production build.
-3. Publishes that build to Filebase/IPFS and verifies it through two gateways.
-4. Deploys the same `dist/` directory to Cloudflare Pages.
-5. Prints the exact `ipfs://<CID>` required for `safe-staking.eth` and pauses for the manual ENS transaction.
-6. After you press Enter, repeatedly reads the Ethereum mainnet ENS resolver until the contenthash matches.
-7. Continues checking Cloudflare and `safe-staking.eth.limo` while gateway caches settle, then prints a final success summary.
+1. Compares `package.json` with the latest IPFS release version. When they match, it prepares the next patch version, synchronizes `packages/safe-lite/package.json` and the frontend/CLI version constant, then exits before any deployment.
+2. After you review and commit that version change, run `pnpm release` again from the clean worktree.
+3. Checks pnpm, Wrangler authentication, and Filebase credentials, then runs release checks and creates one production build.
+4. Publishes that build to Filebase/IPFS and verifies it through two gateways.
+5. Deploys the same `dist/` directory to Cloudflare Pages.
+6. Prints the exact `ipfs://<CID>` required for `safe-staking.eth` and pauses for the manual ENS transaction.
+7. After you press Enter, repeatedly reads the Ethereum mainnet ENS resolver until the contenthash matches.
+8. Continues checking Cloudflare and `safe-staking.eth.limo` while gateway caches settle, then prints a final success summary.
 
 The wizard never handles an ENS private key, sends an ENS transaction, commits Git changes, or prints secret environment-variable values.
 
@@ -60,15 +61,17 @@ Supported options:
 pnpm release --resume
 pnpm release --yes
 pnpm release --quick
+pnpm release --bump=minor
 pnpm release --poll-interval=30
 ```
 
 - `--resume` continues the session stored in `dist/release-session.json`. It validates that the saved commit still matches `HEAD` and skips completed upload/deploy stages.
 - `--yes` skips only the initial release confirmation. Manual ENS confirmation is always required.
 - `--quick` runs `pnpm check` instead of the full Agent, integration, and system release checks.
+- `--bump=patch|minor|major` selects the version prepared when the current version is already published. The default is `patch`.
 - `--poll-interval=<seconds>` changes the ENS and endpoint verification interval. Default: `15`; minimum: `5`.
 
-Press `Ctrl+C` while waiting for ENS to stop safely, then run `pnpm release --resume` later. The generated release records and documentation updates must still be reviewed and committed manually.
+Version preparation never commits or tags automatically. Review the synchronized version files, commit them, then run the wizard again. Press `Ctrl+C` while waiting for ENS to stop safely, then run `pnpm release --resume` later. The generated release records and documentation updates must still be reviewed and committed manually.
 
 The equivalent low-level order is:
 
@@ -97,6 +100,8 @@ Create a Cloudflare Pages project connected to the GitHub repository:
 Configure these environment variables before enabling live account reads, authenticated RPC, or the Staking Agent:
 
 - `VITE_RPC_URL` (optional): browser-safe Ethereum RPC endpoint for live wallet reads. If omitted, the app uses bundled public fallback RPC endpoints.
+- `VITE_API_BASE_URL` (optional): hosted Safecafe API origin for static/IPFS builds. Leave empty for same-origin Pages Functions. ENS/IPFS gateway frontends fall back to `https://safecafe.baserun.link` when this is not configured. This is a build-time browser setting.
+- `SAFECAFE_API_ALLOWED_ORIGINS` (optional): comma-separated CORS allowlist for `/api/*`, for example `https://safe-staking.eth.limo,https://safecafe.baserun.link`. When unset, the API allows Safecafe, `safe-staking.eth.limo`, and the current release CID on dweb.link. Add shared path gateways such as `https://ipfs.filebase.io` explicitly if you want them to call the hosted API.
 - `SAFECAFE_RPC_URL` or `SAFECAFE_RPC_URLS`: server-side Ethereum RPC endpoint(s) used by Pages Functions for authenticated RPC, live account data, Safe discovery, and Agent eligibility checks.
 - `SAFECAFE_SAFE_API_KEYS`: server-side Safe Developer API key(s) for Safe Transaction Service operations. Use comma-separated values for multiple keys, for example `key_a,key_b`. The browser never receives this value; web multisig flows call `/api/safe/transaction`.
 - `SAFECAFE_SAFE_TX_SERVICE_URL` (optional): custom server-side Safe Transaction Service base URL. Leave empty to use `https://api.safe.global/tx-service/eth/api`.
@@ -118,7 +123,7 @@ Configure these environment variables before enabling live account reads, authen
 - `SAFECAFE_RPC_IP_RATE_LIMIT_PER_MINUTE` (optional): IP limit for `/api/rpc/ethereum`. Default: `120`; `0` disables it.
 - `SAFECAFE_SAFE_TX_IP_RATE_LIMIT_PER_MINUTE` (optional): IP limit for `/api/safe/transaction`. Default: `30`; `0` disables it.
 
-`SAFECAFE_LLM_API_KEY` must not be exposed as a `VITE_*` variable. The web app calls the Cloudflare Pages Function at `/api/agent`; the function reads the server-side `SAFECAFE_LLM_*` variables and returns only the Agent response.
+`SAFECAFE_LLM_API_KEY` must not be exposed as a `VITE_*` variable. The web app calls the Cloudflare Pages Function at `/api/agent`; the function reads the server-side `SAFECAFE_LLM_*` variables and returns only the Agent response. During `pnpm release`, `.env` is the source of truth for Safecafe, Vite, and Filebase release configuration when it exists; shell values for missing release keys are ignored. Without `.env`, the wizard uses the current shell environment. `VITE_*` values are consumed while building the browser bundle, while non-empty server runtime variables such as `SAFECAFE_LLM_*` and `SAFECAFE_SAFE_API_KEYS` are synchronized to Cloudflare Pages secrets. Empty values are intentionally not treated as deletion requests; remove stale Cloudflare secrets manually from the dashboard or Wrangler when needed.
 
 The Agent daily quota is intentionally lightweight and in-memory. It is enough for basic abuse control, but counters can reset when Cloudflare starts a new isolate.
 
@@ -193,8 +198,9 @@ pnpm dlx wrangler@latest login
 After deployment, verify the primary mirror:
 
 ```bash
-curl -I https://safecafe.pages.dev/
-curl -I https://safecafe.pages.dev/api/agent
+curl -I https://safecafe.baserun.link/
+curl -I https://safecafe.baserun.link/api/health
+curl -I https://safecafe.baserun.link/api/agent
 ```
 
 `/api/agent` should reject unsupported methods with a controlled error, not a static 404.

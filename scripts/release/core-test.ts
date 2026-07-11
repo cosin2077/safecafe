@@ -1,11 +1,14 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import {
+  collectCloudflarePagesSecrets,
   createReleaseOutputRedactor,
   decodeIpfsContenthash,
   parseReleaseArgs,
+  planReleaseVersion,
   type ReleaseSession,
   redactReleaseError,
+  renderSafecafeVersionModule,
   validateReleaseSession,
 } from "./core"
 
@@ -22,6 +25,7 @@ const session: ReleaseSession = {
 
 test("parseReleaseArgs returns production-safe defaults", () => {
   assert.deepEqual(parseReleaseArgs([]), {
+    bump: "patch",
     pollIntervalMs: 15_000,
     quick: false,
     resume: false,
@@ -30,7 +34,8 @@ test("parseReleaseArgs returns production-safe defaults", () => {
 })
 
 test("parseReleaseArgs accepts supported flags", () => {
-  assert.deepEqual(parseReleaseArgs(["--resume", "--yes", "--quick", "--poll-interval=7"]), {
+  assert.deepEqual(parseReleaseArgs(["--resume", "--yes", "--quick", "--bump=minor", "--poll-interval=7"]), {
+    bump: "minor",
     pollIntervalMs: 7_000,
     quick: true,
     resume: true,
@@ -41,7 +46,59 @@ test("parseReleaseArgs accepts supported flags", () => {
 test("parseReleaseArgs rejects unsafe or unknown values", () => {
   assert.throws(() => parseReleaseArgs(["--poll-interval=4"]), /at least 5 seconds/)
   assert.throws(() => parseReleaseArgs(["--poll-interval=abc"]), /whole number/)
+  assert.throws(() => parseReleaseArgs(["--bump=banana"]), /Version bump/)
   assert.throws(() => parseReleaseArgs(["--unknown"]), /Unknown release option/)
+})
+
+test("planReleaseVersion prepares the requested bump when the current version is already published", () => {
+  assert.deepEqual(planReleaseVersion("0.1.0", "0.1.0", "patch"), {
+    action: "prepare",
+    currentVersion: "0.1.0",
+    nextVersion: "0.1.1",
+  })
+  assert.deepEqual(planReleaseVersion("0.1.0", "0.1.0", "minor"), {
+    action: "prepare",
+    currentVersion: "0.1.0",
+    nextVersion: "0.2.0",
+  })
+  assert.deepEqual(planReleaseVersion("0.1.0", "0.1.0", "major"), {
+    action: "prepare",
+    currentVersion: "0.1.0",
+    nextVersion: "1.0.0",
+  })
+})
+
+test("planReleaseVersion publishes a new version and rejects version rollback", () => {
+  assert.deepEqual(planReleaseVersion("0.1.1", "0.1.0", "patch"), {
+    action: "release",
+    version: "0.1.1",
+  })
+  assert.deepEqual(planReleaseVersion("0.1.0", null, "patch"), {
+    action: "release",
+    version: "0.1.0",
+  })
+  assert.throws(() => planReleaseVersion("0.1.0", "0.1.1", "patch"), /behind latest release/)
+  assert.throws(() => planReleaseVersion("latest", "0.1.0", "patch"), /valid semantic version/)
+})
+
+test("renderSafecafeVersionModule keeps the UI version synchronized", () => {
+  assert.equal(renderSafecafeVersionModule("0.1.1"), 'export const SAFECAFE_VERSION = "0.1.1"\n')
+})
+
+test("collectCloudflarePagesSecrets returns only deploy runtime secrets", () => {
+  const secrets = collectCloudflarePagesSecrets({
+    FILEBASE_ACCESS_TOKEN: "filebase-secret",
+    SAFECAFE_API_ALLOWED_ORIGINS: "https://safe-staking.eth.limo,https://safecafe.baserun.link",
+    SAFECAFE_CLI_PRIVATE_KEY: "0xprivate",
+    SAFECAFE_LLM_API_KEY: "llm-secret",
+    SAFECAFE_SAFE_API_KEYS: "safe-secret",
+    SAFECAFE_AGENT_TEST_VERIFIED_ACCESS: "true",
+    VITE_AGENT_AUTH: "true",
+  })
+  assert.deepEqual(
+    secrets.map((entry) => entry.name),
+    ["SAFECAFE_API_ALLOWED_ORIGINS", "SAFECAFE_SAFE_API_KEYS", "SAFECAFE_LLM_API_KEY", "VITE_AGENT_AUTH"],
+  )
 })
 
 test("validateReleaseSession accepts the matching release commit", () => {

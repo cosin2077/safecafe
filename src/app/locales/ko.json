@@ -35,7 +35,6 @@
   "unstakeAction": "언스테이크",
   "prepareUnstakeAction": "언스테이크 준비",
   "unstakeSub": "출금 대기열 시작",
-  "validatorActionPrepared": "{validator}의 {action}을 준비했습니다. 지갑 확인 전에 개요에서 양식을 검토하세요.",
   "claimWithdrawals": "출금 수령",
   "claimWithdrawalsSub": "사용 가능한 출금 수령",
   "claimRewards": "보상 수령",

@@ -58,6 +58,7 @@ Copy `.env.example` to `.env` and fill in the values you need. Variables are gro
 | Variable | Description |
 | --- | --- |
 | `VITE_RPC_URL` | Ethereum RPC endpoint used by the **web app** (e.g. `/api/rpc/ethereum` for the built-in gateway, or an external URL). |
+| `VITE_API_BASE_URL` | Optional Safecafe API origin for static/IPFS frontends. Leave empty for same-origin Pages Functions. ENS/IPFS gateway frontends fall back to `https://safecafe.baserun.link`. This is a build-time browser setting. |
 | `SAFECAFE_RPC_URL` | Ethereum RPC endpoint used by the **CLI** and server-side reads. |
 
 ### RPC Gateway Auth
@@ -67,6 +68,7 @@ The built-in RPC gateway (`/api/rpc/ethereum`) supports wallet-based session aut
 | Variable | Description |
 | --- | --- |
 | `SAFECAFE_AUTH_SECRET` | HMAC-SHA256 key for signing and verifying session tokens. **Required in production.** A fixed fallback is used automatically on `localhost`. |
+| `SAFECAFE_API_ALLOWED_ORIGINS` | Optional comma-separated CORS origin allowlist for `/api/*`, e.g. `https://safe-staking.eth.limo,https://safecafe.baserun.link`. Defaults include Safecafe, `safe-staking.eth.limo`, and the current release CID on dweb.link. Add shared path gateways such as `https://ipfs.filebase.io` explicitly if you want them to call the hosted API. |
 | `SAFECAFE_RPC_ALLOW_ALL_WALLETS` | Access policy for the RPC gateway. `false` (default) = only wallets holding SAFE tokens or staking positions can connect. `true` = any wallet that signs a challenge can connect. |
 
 ### Server IP Rate Limits
@@ -172,7 +174,7 @@ Safecafe builds to a static frontend:
 pnpm build:web
 ```
 
-The output in `dist/` can be deployed to Cloudflare Pages, IPFS-style static hosting, or any static host that supports SPA fallback routing. Full server-side features under `/api/*` require Cloudflare Pages Functions; pure static hosts or the included Vercel SPA rewrite only serve the frontend shell.
+The output in `dist/` can be deployed to Cloudflare Pages, IPFS-style static hosting, or any static host that supports SPA fallback routing. Full server-side features under `/api/*` require Cloudflare Pages Functions. Pure static hosts can still run the core staking UI with wallet/public-RPC reads; Agent, hosted Safe Transaction Service sync, and server-side read APIs are enhanced features. On ENS/IPFS frontends, configure `VITE_API_BASE_URL` or use the built-in hosted fallback at `https://safecafe.baserun.link`.
 
 Cloudflare Pages is the recommended primary public host. Filebase/IPFS is used for immutable release snapshots, and `safe-staking.eth` is configured to resolve through `https://safe-staking.eth.limo/` after its ENS contenthash points to the current `ipfs://<CID>`. See [CLOUDFLARE.md](CLOUDFLARE.md) for the full development, Cloudflare deployment, IPFS publishing, ENS update, and verification flow.
 
@@ -182,7 +184,7 @@ Maintainers can run the interactive production release wizard with:
 pnpm release
 ```
 
-It publishes one build to IPFS and Cloudflare, pauses for the required manual `safe-staking.eth` contenthash update, then keeps checking ENS and the public endpoints until they all point to the same CID. Interrupted sessions can continue with `pnpm release --resume`; the wizard never updates ENS or commits release records automatically.
+If the current version is already published, the first run prepares the next patch version across the root package, safe-lite package, and frontend/CLI version constant, then stops for review and a manual commit. Run `pnpm release` again after committing to publish one build to IPFS and Cloudflare. Use `--bump=minor` or `--bump=major` when needed. When `.env` exists, the wizard uses it as the source of truth for Safecafe, Vite, and Filebase release configuration; shell values for missing release keys are ignored. Without `.env`, it uses the current shell environment. `VITE_*` values are consumed during build, and non-empty server runtime secrets are synchronized to Cloudflare Pages. Empty values do not delete existing Cloudflare secrets. Interrupted sessions can continue with `pnpm release --resume`; the wizard never updates ENS or commits release records automatically.
 
 <!-- ipfs-latest:start -->
 ## Latest IPFS Release

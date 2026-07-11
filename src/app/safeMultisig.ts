@@ -9,6 +9,7 @@ import {
 } from "@safecafe/safe-lite"
 import type { Address, Hex } from "viem"
 import { createSafenetPublicClient, type TxPlan } from "../protocol"
+import { apiUrl, resolveApiBaseUrl } from "../shared/apiUrl"
 
 type Eip1193Provider = {
   request: (args: { method: string; params?: object | readonly unknown[] }) => Promise<unknown>
@@ -73,7 +74,8 @@ export async function submitSafeMultisigPlan(params: {
   const testKit = readTestKit()
   if (testKit?.createSafeProtocolKit) return submitWithTestKit(params, testKit)
 
-  const publicClient = createSafenetPublicClient({ authToken: params.authToken, rpcUrl: params.rpcUrl })
+  const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL)
+  const publicClient = createSafenetPublicClient({ apiBaseUrl, authToken: params.authToken, rpcUrl: params.rpcUrl })
   const txService = params.userSafeApiKey?.trim()
     ? new DirectSafeTxServiceClient({
         apiKey: params.userSafeApiKey.trim(),
@@ -82,6 +84,7 @@ export async function submitSafeMultisigPlan(params: {
       })
     : new ProxiedSafeTxServiceClient({
         authToken: params.authToken,
+        endpoint: apiUrl("/api/safe/transaction", import.meta.env.VITE_API_BASE_URL),
         messages: params.safeTxErrorMessages,
         safeAddress: params.safeAddress,
         senderAddress: params.signer,

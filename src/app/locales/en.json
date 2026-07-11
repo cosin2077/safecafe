@@ -35,7 +35,6 @@
   "unstakeAction": "Unstake",
   "prepareUnstakeAction": "Prepare unstake",
   "unstakeSub": "Start the withdrawal queue",
-  "validatorActionPrepared": "{action} for {validator}. Review the form on Overview before wallet confirmation.",
   "claimWithdrawals": "Claim Withdrawals",
   "claimWithdrawalsSub": "Collect available withdrawals",
   "claimRewards": "Claim Rewards",

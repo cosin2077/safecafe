@@ -9,6 +9,7 @@ export type AgentFeedbackKv = {
 
 export type RpcGatewayEnv = {
   SAFECAFE_AGENT_FEEDBACK_IP_RATE_LIMIT_PER_MINUTE?: string
+  SAFECAFE_API_ALLOWED_ORIGINS?: string
   SAFECAFE_RPC_ALLOW_ALL_WALLETS?: string
   SAFECAFE_AUTH_SECRET?: string
   SAFECAFE_MOCK_ACCOUNT?: string

@@ -3,6 +3,7 @@ import { ethereumMainnet } from "./chains"
 import { DEFAULT_RPC_URLS } from "./contracts"
 
 export type SafenetPublicClientOptions = {
+  apiBaseUrl?: string
   authToken?: string | null
   rpcUrl?: string
 }
@@ -10,8 +11,9 @@ export type SafenetPublicClientOptions = {
 export function createSafenetPublicClient(options?: SafenetPublicClientOptions | string): PublicClient {
   const normalized = typeof options === "string" ? { rpcUrl: options } : (options ?? {})
   const useGateway = normalized.authToken || (normalized.rpcUrl && isSafecafeRpcGatewayUrl(normalized.rpcUrl))
+  const gatewayUrl = createGatewayUrl(normalized.apiBaseUrl)
   const gatewayTransport = useGateway
-    ? http("/api/rpc/ethereum", {
+    ? http(gatewayUrl, {
         fetchOptions: normalized.authToken
           ? { headers: { authorization: `Bearer ${normalized.authToken}` } }
           : undefined,
@@ -23,6 +25,12 @@ export function createSafenetPublicClient(options?: SafenetPublicClientOptions |
     chain: ethereumMainnet,
     transport: gatewayTransport ?? fallback(transports),
   })
+}
+
+function createGatewayUrl(apiBaseUrl?: string) {
+  const path = "/api/rpc/ethereum"
+  const base = apiBaseUrl?.trim().replace(/\/+$/, "")
+  return base ? `${base}${path}` : path
 }
 
 function isSafecafeRpcGatewayUrl(rpcUrl: string) {

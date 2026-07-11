@@ -16,18 +16,19 @@
 
 ## 发布流程
 
-1. 检查 Node、pnpm、Git、Wrangler 和当前工作目录。
-2. 要求 Git 工作区干净，并展示 branch、commit、Cloudflare 项目名和 ENS 名称。
-3. 检查 Filebase 必需变量是否存在，但不输出变量值。
-4. 运行 `pnpm check` 和生产发布测试。完整模式执行 Agent、integration 和 system 检查；`--quick` 只执行 `pnpm check`。
-5. 生成一次用于发布的 Web 构建。完整模式复用 system 检查前生成的构建，`--quick` 单独执行 `pnpm build:web`。
-6. 对同一个 `dist/` 执行 `node scripts/publish-ipfs.mjs --skip-build`。
-7. 从 `dist/release-record.json` 读取 CID，校验 commit、`dirty: false` 和发布记录结构。
-8. 通过至少两个网关验证 `index.html` 与 `release-manifest.json` 可访问。
-9. 使用 `wrangler pages deploy dist --project-name <project>` 部署同一份构建。
-10. 展示 `ipfs://<CID>` 和 ENS 管理入口，等待用户手动更新 `safe-staking.eth`。
-11. 用户按 Enter 后，直接从 Ethereum 主网 ENS resolver 读取 `contenthash`。未匹配时展示当前 CID 与目标 CID，并按固定间隔继续检查。
-12. ENS 匹配后验证 `safe-staking.eth.limo`、Cloudflare 发布地址和 release record，输出最终摘要。
+1. 要求 Git 工作区干净，比较根 `package.json` 与最新 IPFS release record 的版本。若两者相同，默认准备下一个 patch 版本，同步 safe-lite package 与前端/CLI 版本常量后立即退出，不执行任何发布操作。
+2. 用户审查并手动提交版本变更后再次运行 `pnpm release`；已高于线上版本时才继续发布。
+3. 检查 Node、pnpm、Git、Wrangler 和当前工作目录，并展示 branch、commit、Cloudflare 项目名和 ENS 名称。
+4. 检查 Filebase 必需变量是否存在，但不输出变量值。
+5. 运行 `pnpm check` 和生产发布测试。完整模式执行 Agent、integration 和 system 检查；`--quick` 只执行 `pnpm check`。
+6. 生成一次用于发布的 Web 构建。完整模式复用 system 检查前生成的构建，`--quick` 单独执行 `pnpm build:web`。
+7. 对同一个 `dist/` 执行 `node scripts/publish-ipfs.mjs --skip-build`。
+8. 从 `dist/release-record.json` 读取 CID，校验 commit、`dirty: false` 和发布记录结构。
+9. 通过至少两个网关验证 `index.html` 与 `release-manifest.json` 可访问。
+10. 使用 `wrangler pages deploy dist --project-name <project>` 部署同一份构建。
+11. 展示 `ipfs://<CID>` 和 ENS 管理入口，等待用户手动更新 `safe-staking.eth`。
+12. 用户按 Enter 后，直接从 Ethereum 主网 ENS resolver 读取 `contenthash`。未匹配时展示当前 CID 与目标 CID，并按固定间隔继续检查。
+13. ENS 匹配后验证 `safe-staking.eth.limo`、Cloudflare 发布地址和 release record，输出最终摘要。
 
 ## 交互与参数
 
@@ -35,6 +36,7 @@
 - `--resume`：读取 `dist/release-session.json`，从最后一个可恢复阶段继续。
 - `--yes`：跳过初始发布确认，但不能跳过人工 ENS 更新。
 - `--quick`：只运行 `pnpm check`，省略完整发布测试；默认执行完整发布检查。
+- `--bump=patch|minor|major`：当前版本已发布时要准备的版本类型，默认为 `patch`。
 - `--poll-interval=<秒>`：配置 ENS 检查间隔，默认 15 秒，最小 5 秒。
 - `Ctrl+C` 可安全退出；已生成的会话状态保留，后续使用 `--resume`。
 

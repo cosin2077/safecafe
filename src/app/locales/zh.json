@@ -35,7 +35,6 @@
   "unstakeAction": "取消质押",
   "prepareUnstakeAction": "准备取消质押",
   "unstakeSub": "进入提款队列",
-  "validatorActionPrepared": "已为 {validator} 准备“{action}”。请在概览页检查表单后再通过钱包确认。",
   "claimWithdrawals": "领取提款",
   "claimWithdrawalsSub": "领取可用提款",
   "claimRewards": "领取奖励",

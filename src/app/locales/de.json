@@ -35,7 +35,6 @@
   "unstakeAction": "Unstaken",
   "prepareUnstakeAction": "Unstake vorbereiten",
   "unstakeSub": "Auszahlungswarteschlange starten",
-  "validatorActionPrepared": "{action} für {validator}. Prüfe das Formular in der Übersicht vor der Wallet-Bestätigung.",
   "claimWithdrawals": "Auszahlungen abrufen",
   "claimWithdrawalsSub": "Verfügbare Auszahlungen einsammeln",
   "claimRewards": "Belohnungen abrufen",

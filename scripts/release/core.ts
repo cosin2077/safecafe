@@ -1,11 +1,18 @@
 import { type Hex, hexToBytes } from "viem"
 
 export type ReleaseArgs = {
+  bump: ReleaseVersionBump
   pollIntervalMs: number
   quick: boolean
   resume: boolean
   yes: boolean
 }
+
+export type ReleaseVersionBump = "major" | "minor" | "patch"
+
+export type ReleaseVersionPlan =
+  | { action: "prepare"; currentVersion: string; nextVersion: string }
+  | { action: "release"; version: string }
 
 export type ReleaseStage = "awaiting_ens" | "cloudflare_deployed" | "ipfs_published" | "verified"
 
@@ -27,8 +34,42 @@ export type ReleaseOutputRedactor = {
   write: (value: string) => void
 }
 
+export const cloudflarePagesRuntimeSecretNames = [
+  "SAFECAFE_AUTH_SECRET",
+  "SAFECAFE_RPC_ALLOW_ALL_WALLETS",
+  "SAFECAFE_API_ALLOWED_ORIGINS",
+  "SAFECAFE_RPC_URL",
+  "SAFECAFE_RPC_URLS",
+  "SAFECAFE_API_IP_RATE_LIMIT_PER_MINUTE",
+  "SAFECAFE_AGENT_IP_RATE_LIMIT_PER_MINUTE",
+  "SAFECAFE_AGENT_FEEDBACK_IP_RATE_LIMIT_PER_MINUTE",
+  "SAFECAFE_AUTH_IP_RATE_LIMIT_PER_MINUTE",
+  "SAFECAFE_READ_API_IP_RATE_LIMIT_PER_MINUTE",
+  "SAFECAFE_RPC_IP_RATE_LIMIT_PER_MINUTE",
+  "SAFECAFE_SAFE_TX_IP_RATE_LIMIT_PER_MINUTE",
+  "SAFECAFE_SAFE_API_KEYS",
+  "SAFECAFE_SAFE_TX_SERVICE_URL",
+  "SAFECAFE_LLM_API_BASE",
+  "SAFECAFE_LLM_API_MODEL",
+  "SAFECAFE_LLM_API_KEY",
+  "SAFECAFE_LLM_TIMEOUT_MS",
+  "SAFECAFE_LLM_MAX_TOKENS",
+  "SAFECAFE_LLM_HEADER",
+  "SAFECAFE_AGENT_DAILY_LIMIT",
+  "SAFECAFE_AGENT_FEEDBACK_DAILY_LIMIT",
+  "SAFECAFE_AGENT_FEEDBACK_GLOBAL_DAILY_LIMIT",
+  "VITE_AGENT_AUTH",
+] as const
+
+export function collectCloudflarePagesSecrets(environment: NodeJS.ProcessEnv): Array<{ name: string; value: string }> {
+  return cloudflarePagesRuntimeSecretNames
+    .map((name) => ({ name, value: environment[name]?.trim() ?? "" }))
+    .filter((entry) => entry.value.length > 0)
+}
+
 export function parseReleaseArgs(argv: string[]): ReleaseArgs {
   const result: ReleaseArgs = {
+    bump: "patch",
     pollIntervalMs: 15_000,
     quick: false,
     resume: false,
@@ -39,7 +80,13 @@ export function parseReleaseArgs(argv: string[]): ReleaseArgs {
     if (argument === "--quick") result.quick = true
     else if (argument === "--resume") result.resume = true
     else if (argument === "--yes") result.yes = true
-    else if (argument.startsWith("--poll-interval=")) {
+    else if (argument.startsWith("--bump=")) {
+      const bump = argument.slice("--bump=".length)
+      if (bump !== "major" && bump !== "minor" && bump !== "patch") {
+        throw new Error("Version bump must be major, minor, or patch.")
+      }
+      result.bump = bump
+    } else if (argument.startsWith("--poll-interval=")) {
       const secondsText = argument.slice("--poll-interval=".length)
       if (!/^\d+$/.test(secondsText)) throw new Error("Poll interval must be a whole number of seconds.")
       const seconds = Number(secondsText)
@@ -52,6 +99,43 @@ export function parseReleaseArgs(argv: string[]): ReleaseArgs {
   }
 
   return result
+}
+
+export function planReleaseVersion(
+  currentVersion: string,
+  latestVersion: string | null,
+  bump: ReleaseVersionBump,
+): ReleaseVersionPlan {
+  const current = parseSemanticVersion(currentVersion)
+  if (!latestVersion) return { action: "release", version: currentVersion }
+  const latest = parseSemanticVersion(latestVersion)
+  const comparison = compareSemanticVersion(current, latest)
+  if (comparison < 0) {
+    throw new Error(`Current version ${currentVersion} is behind latest release ${latestVersion}.`)
+  }
+  if (comparison > 0) return { action: "release", version: currentVersion }
+
+  const next = { ...current }
+  if (bump === "major") {
+    next.major += 1
+    next.minor = 0
+    next.patch = 0
+  } else if (bump === "minor") {
+    next.minor += 1
+    next.patch = 0
+  } else {
+    next.patch += 1
+  }
+  return {
+    action: "prepare",
+    currentVersion,
+    nextVersion: `${next.major}.${next.minor}.${next.patch}`,
+  }
+}
+
+export function renderSafecafeVersionModule(version: string): string {
+  parseSemanticVersion(version)
+  return `export const SAFECAFE_VERSION = "${version}"\n`
 }
 
 export function validateReleaseSession(input: unknown, head: string): ReleaseSession {
@@ -149,4 +233,29 @@ function encodeBase32Multibase(bytes: Uint8Array): string {
 
   if (bits > 0) output += alphabet[(buffer << (5 - bits)) & 0x1f] ?? ""
   return output
+}
+
+type SemanticVersion = {
+  major: number
+  minor: number
+  patch: number
+}
+
+function parseSemanticVersion(value: string): SemanticVersion {
+  const match = value.match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/)
+  if (!match) throw new Error(`Version ${value} is not a valid semantic version.`)
+  const [, majorText, minorText, patchText] = match
+  const version = {
+    major: Number(majorText),
+    minor: Number(minorText),
+    patch: Number(patchText),
+  }
+  if (!Object.values(version).every(Number.isSafeInteger)) {
+    throw new Error(`Version ${value} is not a valid semantic version.`)
+  }
+  return version
+}
+
+function compareSemanticVersion(first: SemanticVersion, second: SemanticVersion): number {
+  return first.major - second.major || first.minor - second.minor || first.patch - second.patch
 }

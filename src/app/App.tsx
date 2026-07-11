@@ -50,6 +50,7 @@ import {
 } from "../protocol"
 import { ethereumMainnet } from "../protocol/chains"
 import { createPathMap, navFromPath as resolveNavFromPath } from "../shared"
+import { apiUrl, resolveApiBaseUrl } from "../shared/apiUrl"
 import { SAFECAFE_VERSION } from "../shared/version"
 import { AgentLauncher } from "./AgentLauncher"
 import { DetailModal } from "./DetailModal"
@@ -1109,14 +1110,6 @@ export function App() {
 
   function openValidatorDashboardAction(nextValidator: Address, nextAction: Extract<Action, "stake" | "unstake">) {
     if (!selectValidatorAction(nextValidator, nextAction)) return
-    const nextValidatorInfo = findValidator(validators, nextValidator)
-    const actionLabel = nextAction === "stake" ? t.prepareStakeAction : t.prepareUnstakeAction
-    toast(
-      t.validatorActionPrepared
-        .replace("{action}", actionLabel)
-        .replace("{validator}", nextValidatorInfo?.label ?? compactAddress(nextValidator)),
-      "info",
-    )
     navigate("dashboard")
     setDashboardActionFocusRequest((current) => current + 1)
   }
@@ -1574,7 +1567,11 @@ export function App() {
         },
       }
     }
-    const client = createSafenetPublicClient({ authToken, rpcUrl: effectiveRpcUrl })
+    const client = createSafenetPublicClient({
+      apiBaseUrl: resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL),
+      authToken,
+      rpcUrl: effectiveRpcUrl,
+    })
     const txsToSimulate = txsSafeToSimulate(plan)
     try {
       for (const tx of txsToSimulate) {
@@ -1646,7 +1643,11 @@ export function App() {
       })
       const requireAuth = Boolean(options.requireAuth && !customRpcEnabled)
       const authToken = requireAuth ? (rpcAuthToken ?? (await ensureRpcAuthTokenForCurrentWallet())) : null
-      const publicClient = createSafenetPublicClient({ authToken, rpcUrl: effectiveRpcUrl })
+      const publicClient = createSafenetPublicClient({
+        apiBaseUrl: resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL),
+        authToken,
+        rpcUrl: effectiveRpcUrl,
+      })
       const refreshedForExecution = await refreshLiveReads(subjectAccount, { forceRefresh: true })
       const liveSnapshotForExecution = refreshedForExecution?.snapshot ?? liveSnapshot
       if (!liveSnapshotForExecution) throw new Error(t.connectToPlan)
@@ -2592,6 +2593,16 @@ export function App() {
 
 const liveReadCache = new Map<string, Promise<LiveReadResult>>()
 
+class ApiResponseError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = "ApiResponseError"
+    this.status = status
+  }
+}
+
 async function readLiveData(
   account: Address,
   options: { forceRefresh?: boolean } = {},
@@ -2605,21 +2616,34 @@ async function readLiveData(
   const request = (async () => {
     const params = new URLSearchParams({ account })
     if (options.forceRefresh) params.set("refresh", "true")
-    const response = await fetch(`/api/account/live?${params.toString()}`, { cache: "no-store" })
-    if (!response.ok) throw new Error(await readLiveDataError(response))
+    const response = await fetch(apiUrl(`/api/account/live?${params.toString()}`, import.meta.env.VITE_API_BASE_URL), {
+      cache: "no-store",
+    })
+    if (!response.ok) throw new ApiResponseError(response.status, await readLiveDataError(response))
     return parseLiveReadResult(await response.json())
   })()
 
   liveReadCache.set(cacheKey, request)
   try {
     return await request
+  } catch (error) {
+    if (!shouldFallbackToDirectLiveRead(error)) throw error
+    console.warn("Safecafe read API unavailable, falling back to direct public RPC reads:", error)
+    return readLiveDataFromCustomRpc(account)
   } finally {
     liveReadCache.delete(cacheKey)
   }
 }
 
-async function readLiveDataFromCustomRpc(account: Address, rpcUrl: string): Promise<LiveReadResult> {
-  const client = createSafenetPublicClient({ rpcUrl })
+function shouldFallbackToDirectLiveRead(error: unknown) {
+  if (error instanceof ApiResponseError) {
+    return error.status === 404 || error.status === 405
+  }
+  return error instanceof TypeError || error instanceof SyntaxError
+}
+
+async function readLiveDataFromCustomRpc(account: Address, rpcUrl?: string): Promise<LiveReadResult> {
+  const client = createSafenetPublicClient(rpcUrl ? { rpcUrl } : undefined)
   const [snapshot, health, validatorMetadata, rewardProofResult] = await Promise.all([
     readAccountSnapshot(client, account),
     readHealth(client),
@@ -2672,7 +2696,10 @@ function formatLiveDataTimestamp(fetchedAt: number, locale: Locale) {
 
 async function fetchOwnedSafesWithMetadata(owner: Address, signal?: AbortSignal): Promise<DiscoveredSafe[]> {
   const params = new URLSearchParams({ owner })
-  const response = await fetch(`/api/safes?${params.toString()}`, { cache: "no-store", signal })
+  const response = await fetch(apiUrl(`/api/safes?${params.toString()}`, import.meta.env.VITE_API_BASE_URL), {
+    cache: "no-store",
+    signal,
+  })
   if (!response.ok) throw new Error(await readApiError(response, "Safe discovery failed"))
   const data = (await response.json()) as { safes?: unknown }
   if (!Array.isArray(data.safes)) return []
@@ -2681,14 +2708,17 @@ async function fetchOwnedSafesWithMetadata(owner: Address, signal?: AbortSignal)
 
 async function fetchSafeMetadata(address: Address, signal?: AbortSignal): Promise<DiscoveredSafe> {
   const params = new URLSearchParams({ safe: address })
-  const response = await fetch(`/api/safes?${params.toString()}`, { cache: "no-store", signal })
+  const response = await fetch(apiUrl(`/api/safes?${params.toString()}`, import.meta.env.VITE_API_BASE_URL), {
+    cache: "no-store",
+    signal,
+  })
   if (!response.ok) throw new Error(await readApiError(response, "Safe discovery failed"))
   const data = (await response.json()) as { safe?: unknown }
   return parseDiscoveredSafe(data.safe) ?? emptyDiscoveredSafe(address)
 }
 
 async function fetchValidatorMetadata(): Promise<ValidatorInfo[]> {
-  const response = await fetch("/api/validators", { cache: "no-store" })
+  const response = await fetch(apiUrl("/api/validators", import.meta.env.VITE_API_BASE_URL), { cache: "no-store" })
   if (!response.ok) throw new Error(await readApiError(response, "Validator metadata failed"))
   const data = (await response.json()) as { validators?: unknown }
   if (!Array.isArray(data.validators)) return []

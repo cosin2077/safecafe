@@ -87,17 +87,20 @@ export class DirectSafeTxServiceClient implements SafeLiteTxService {
 
 export class ProxiedSafeTxServiceClient implements SafeLiteTxService {
   readonly #authToken?: string | null
+  readonly #endpoint: string
   readonly #messages?: SafeTxErrorMessages
   readonly #safeAddress: Address
   readonly #senderAddress: Address
 
   constructor(config: {
     authToken?: string | null
+    endpoint?: string
     messages?: SafeTxErrorMessages
     safeAddress: Address
     senderAddress: Address
   }) {
     this.#authToken = config.authToken
+    this.#endpoint = config.endpoint?.trim() || "/api/safe/transaction"
     this.#messages = config.messages
     this.#safeAddress = config.safeAddress
     this.#senderAddress = config.senderAddress
@@ -131,7 +134,7 @@ export class ProxiedSafeTxServiceClient implements SafeLiteTxService {
   }
 
   async #request(body: Record<string, unknown>) {
-    const response = await fetch("/api/safe/transaction", {
+    const response = await fetch(this.#endpoint, {
       method: "POST",
       headers: {
         accept: "application/json",

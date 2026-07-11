@@ -1,5 +1,8 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
 import { test } from "node:test"
 import type { ReleaseArgs, ReleaseSession } from "./release/core"
 import {
@@ -11,6 +14,7 @@ import {
 } from "./release.ts"
 
 const defaultArgs: ReleaseArgs = {
+  bump: "patch",
   pollIntervalMs: 5_000,
   quick: false,
   resume: false,
@@ -57,6 +61,10 @@ function createDependencies(overrides: Partial<ReleaseWorkflowDependencies> = {}
     loadSession: async () => null,
     log: (event) => events.push(`log:${event}`),
     now: () => "2026-07-11T00:00:00.000Z",
+    prepareVersion: async (bump) => {
+      events.push(`prepare-version:${bump}`)
+      return null
+    },
     promptForEnsUpdate: async () => {
       events.push("prompt-ens")
     },
@@ -94,7 +102,9 @@ test("runReleaseWorkflow executes the complete release in order", async () => {
 
   const session = await runReleaseWorkflow(defaultArgs, dependencies)
 
+  assert.ok(session)
   assert.deepEqual(events, [
+    "prepare-version:patch",
     "head",
     "preflight:new",
     "confirm",
@@ -121,6 +131,21 @@ test("runReleaseWorkflow executes the complete release in order", async () => {
     savedSessions.map((item) => item.stage),
     ["ipfs_published", "cloudflare_deployed", "awaiting_ens", "verified"],
   )
+})
+
+test("runReleaseWorkflow stops after preparing the next version", async () => {
+  const { dependencies, events, savedSessions } = createDependencies({
+    prepareVersion: async (bump) => {
+      events.push(`prepare-version:${bump}`)
+      return "0.1.1"
+    },
+  })
+
+  const session = await runReleaseWorkflow({ ...defaultArgs, bump: "patch" }, dependencies)
+
+  assert.equal(session, null)
+  assert.deepEqual(events, ["prepare-version:patch", "log:version_prepared"])
+  assert.equal(savedSessions.length, 0)
 })
 
 test("runReleaseWorkflow does not create a session before IPFS succeeds", async () => {
@@ -166,6 +191,7 @@ test("resume skips completed work and retries an unfinished Cloudflare deploy", 
 
   await runReleaseWorkflow({ ...defaultArgs, resume: true }, dependencies)
 
+  assert.equal(events.includes("prepare-version:patch"), false)
   assert.equal(events.includes("checks:full"), false)
   assert.equal(events.includes("build"), false)
   assert.equal(events.includes("publish-ipfs"), false)
@@ -312,6 +338,51 @@ test("verifyFinalEndpoints matches Cloudflare and eth.limo to the release CID", 
   await verifyFinalEndpoints(verifiedSession, fetcher)
 })
 
+test("release CLI prepares and synchronizes the next version before deployment", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "safecafe-release-version-"))
+  try {
+    await mkdir(join(fixtureRoot, "packages/safe-lite"), { recursive: true })
+    await mkdir(join(fixtureRoot, "releases/ipfs"), { recursive: true })
+    await mkdir(join(fixtureRoot, "src/shared"), { recursive: true })
+    await writeFile(
+      join(fixtureRoot, "package.json"),
+      `${JSON.stringify({ name: "safecafe", version: "0.1.0" }, null, 2)}\n`,
+    )
+    await writeFile(
+      join(fixtureRoot, "packages/safe-lite/package.json"),
+      `${JSON.stringify({ name: "@safecafe/safe-lite", version: "0.1.0" }, null, 2)}\n`,
+    )
+    await writeFile(join(fixtureRoot, "releases/ipfs/latest.json"), `${JSON.stringify({ version: "0.1.0" })}\n`)
+    await writeFile(join(fixtureRoot, "src/shared/version.ts"), 'export const SAFECAFE_VERSION = "0.1.0"\n')
+    runFixtureGit(fixtureRoot, ["init", "--quiet"])
+    runFixtureGit(fixtureRoot, ["config", "user.email", "release-test@safecafe.local"])
+    runFixtureGit(fixtureRoot, ["config", "user.name", "Safecafe Release Test"])
+    runFixtureGit(fixtureRoot, ["add", "."])
+    runFixtureGit(fixtureRoot, ["commit", "--quiet", "-m", "fixture"])
+
+    const result = spawnSync(
+      process.execPath,
+      [resolve("node_modules/tsx/dist/cli.mjs"), resolve("scripts/release.ts"), "--bump=minor"],
+      { cwd: fixtureRoot, encoding: "utf8" },
+    )
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+    assert.equal(JSON.parse(await readFile(join(fixtureRoot, "package.json"), "utf8")).version, "0.2.0")
+    assert.equal(
+      JSON.parse(await readFile(join(fixtureRoot, "packages/safe-lite/package.json"), "utf8")).version,
+      "0.2.0",
+    )
+    assert.equal(
+      await readFile(join(fixtureRoot, "src/shared/version.ts"), "utf8"),
+      'export const SAFECAFE_VERSION = "0.2.0"\n',
+    )
+    await assert.rejects(() => readFile(join(fixtureRoot, "dist/release-session.json")), /ENOENT/)
+    assert.match(result.stdout, /已准备发布版本 0\.2\.0/)
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true })
+  }
+})
+
 test("release CLI renders argument errors without an unhandled exception", () => {
   const result = spawnSync("pnpm", ["exec", "tsx", "scripts/release.ts", "--unknown"], {
     cwd: process.cwd(),
@@ -323,3 +394,8 @@ test("release CLI renders argument errors without an unhandled exception", () =>
   assert.match(output, /发布失败/)
   assert.equal(output.includes("triggerUncaughtException"), false)
 })
+
+function runFixtureGit(cwd: string, args: string[]) {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8" })
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+}

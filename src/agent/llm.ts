@@ -1,5 +1,6 @@
 import { type Address, getAddress, isAddress } from "viem"
 import { formatSafeInput } from "../protocol"
+import { apiUrl } from "../shared/apiUrl"
 import type { AgentAmount, AgentContext, AgentIntent, AgentValidatorRef } from "./types"
 import {
   type AgentToolCall,
@@ -82,7 +83,7 @@ export type AgentStreamEvent =
   | { type: "final"; content: string; source: AgentChatResponse["source"] }
 
 export async function requestAgentReply(request: AgentChatRequest): Promise<AgentChatResponse> {
-  const response = await fetch("/api/agent", {
+  const response = await fetch(apiUrl("/api/agent", import.meta.env?.VITE_API_BASE_URL), {
     method: "POST",
     headers: agentRequestHeaders(request.authToken),
     body: JSON.stringify(request),
@@ -101,7 +102,7 @@ export async function requestAgentReplyStream(
     await requestUserLlmReplyStream(request, userLlm, onEvent, signal)
     return
   }
-  const response = await fetch("/api/agent", {
+  const response = await fetch(apiUrl("/api/agent", import.meta.env?.VITE_API_BASE_URL), {
     method: "POST",
     headers: { ...agentRequestHeaders(request.authToken), accept: "text/event-stream" },
     body: JSON.stringify({ ...request, stream: true }),
@@ -423,7 +424,7 @@ async function executeUserLlmTool(toolCall: AgentToolCall, request: AgentChatReq
 
 async function submitAgentFeedback(input: Record<string, unknown>, authToken: string | null | undefined) {
   try {
-    const response = await fetch("/api/agent/feedback", {
+    const response = await fetch(apiUrl("/api/agent/feedback", import.meta.env?.VITE_API_BASE_URL), {
       method: "POST",
       headers: agentRequestHeaders(authToken),
       body: JSON.stringify(input),

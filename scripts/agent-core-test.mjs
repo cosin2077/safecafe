@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 import { encodeFunctionData } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
 
+import { isDefaultApiCorsOrigin } from "../functions/api/_middleware.ts"
 import {
   compileAgentPlan,
   flattenCurrentExecutableTxPlan,
@@ -54,6 +55,7 @@ import {
 import { rpcPoolTestHooks, rpcUrls } from "../src/server/rpcPool.ts"
 import { handleSafeTxServiceRequest } from "../src/server/safeTxService.ts"
 import { handleValidatorsRequest, readValidatorMetadata, validatorMetadataTestHooks } from "../src/server/validators.ts"
+import { apiUrl, isSafecafeStaticFrontendHost } from "../src/shared/apiUrl.ts"
 import { assertSuccessfulReceipt } from "../src/shared/cli.ts"
 
 function parseServerSentEvents(text) {
@@ -385,8 +387,27 @@ assert.equal(
 assert.equal(DEFAULT_RPC_URLS[0], "https://ethereum-rpc.publicnode.com")
 assert.equal(createSafenetPublicClient({ authToken: "test-token" }).transport.type, "http")
 assert.equal(createSafenetPublicClient({ authToken: "test-token" }).transport.url, "/api/rpc/ethereum")
+assert.equal(
+  createSafenetPublicClient({ apiBaseUrl: "https://safecafe.baserun.link", authToken: "test-token" }).transport.url,
+  "https://safecafe.baserun.link/api/rpc/ethereum",
+)
 assert.equal(createSafenetPublicClient().transport.type, "fallback")
 assert.equal(createSafenetPublicClient({ rpcUrl: "/api/rpc/ethereum" }).transport.type, "http")
+globalThis.location = { hostname: "safe-staking.eth.limo" }
+assert.equal(apiUrl("/api/health"), "https://safecafe.baserun.link/api/health")
+globalThis.location = { hostname: "bafybeicuiscughm4nzr7fln377jv243mi23yzbzk2eklvvteqmckjxs7fy.ipfs.dweb.link" }
+assert.equal(apiUrl("/api/health"), "https://safecafe.baserun.link/api/health")
+globalThis.location = { hostname: "ipfs.filebase.io" }
+assert.equal(apiUrl("/api/health"), "https://safecafe.baserun.link/api/health")
+assert.equal(isSafecafeStaticFrontendHost("example.com"), false)
+delete globalThis.location
+assert.equal(isDefaultApiCorsOrigin("https://safe-staking.eth.limo"), true)
+assert.equal(
+  isDefaultApiCorsOrigin("https://bafybeicuiscughm4nzr7fln377jv243mi23yzbzk2eklvvteqmckjxs7fy.ipfs.dweb.link"),
+  true,
+)
+assert.equal(isDefaultApiCorsOrigin("https://evil.eth.limo"), false)
+assert.equal(isDefaultApiCorsOrigin("https://ipfs.filebase.io"), false)
 
 const actionStatusMessages = {
   preparingAction: "Preparing...",
@@ -592,10 +613,10 @@ assert.match(
   /setDashboardActionFocusRequest\(\(current\) => current \+ 1\)/,
   "Validator row actions should request focus on the dashboard action form after navigation.",
 )
-assert.match(
+assert.doesNotMatch(
   appSource,
-  /t\.validatorActionPrepared[\s\S]*\.replace\("\{action\}", actionLabel\)[\s\S]*\.replace\("\{validator\}"/,
-  "Validator row actions should explain the dashboard handoff instead of silently jumping pages.",
+  /validatorActionPrepared/,
+  "Validator row actions should rely on navigation and focused form state instead of a duplicate handoff toast.",
 )
 assert.match(
   appSource,

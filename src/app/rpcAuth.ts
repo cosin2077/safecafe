@@ -1,5 +1,6 @@
 import type { Address } from "viem"
 import { CHAIN_ID } from "../protocol"
+import { apiUrl } from "../shared/apiUrl"
 import { appStorageKeys, readStorageJson, removeStorageValue, writeStorageJson } from "./persistence"
 import type { WalletIdentity } from "./walletIdentity"
 
@@ -63,7 +64,7 @@ export async function ensureRpcSession(
   if (!normalized.signer || !normalized.subject) return null
   const cached = readRpcSession(normalized)
   if (cached) return cached
-  const challengeResponse = await fetch("/api/auth/challenge", {
+  const challengeResponse = await fetch(apiUrl("/api/auth/challenge", import.meta.env.VITE_API_BASE_URL), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ chainId: CHAIN_ID, signer: normalized.signer, subject: normalized.subject }),
@@ -74,7 +75,7 @@ export async function ensureRpcSession(
     method: "personal_sign",
     params: [challenge.message, normalized.signer],
   })) as string
-  const verifyResponse = await fetch("/api/auth/verify", {
+  const verifyResponse = await fetch(apiUrl("/api/auth/verify", import.meta.env.VITE_API_BASE_URL), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

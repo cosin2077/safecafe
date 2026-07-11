@@ -8,12 +8,17 @@ import { mainnet } from "viem/chains"
 import { namehash, normalize } from "viem/ens"
 import { DEFAULT_RPC_URLS } from "../src/protocol/contracts"
 import {
+  cloudflarePagesRuntimeSecretNames,
+  collectCloudflarePagesSecrets,
   createReleaseOutputRedactor,
   decodeIpfsContenthash,
   parseReleaseArgs,
+  planReleaseVersion,
   type ReleaseArgs,
   type ReleaseSession,
+  type ReleaseVersionBump,
   redactReleaseError,
+  renderSafecafeVersionModule,
   validateReleaseSession,
 } from "./release/core"
 
@@ -22,6 +27,11 @@ const ensName = "safe-staking.eth"
 const ensManagerUrl = `https://app.ens.domains/${ensName}`
 const sessionPath = resolve("dist/release-session.json")
 const releaseRecordPath = resolve("dist/release-record.json")
+const packageJsonPath = resolve("package.json")
+const safeLitePackageJsonPath = resolve("packages/safe-lite/package.json")
+const uiVersionPath = resolve("src/shared/version.ts")
+const latestReleaseRecordPaths = [resolve("releases/ipfs/latest.json"), resolve("public/release-record.json")]
+let releaseEnvFileFound = false
 const contenthashAbi = [
   {
     inputs: [{ name: "node", type: "bytes32" }],
@@ -46,7 +56,12 @@ export type IpfsReleaseRecord = {
   }
 }
 
-export type ReleaseWorkflowEvent = "ens_check_error" | "ens_mismatch" | "final_check_error" | "release_complete"
+export type ReleaseWorkflowEvent =
+  | "ens_check_error"
+  | "ens_mismatch"
+  | "final_check_error"
+  | "release_complete"
+  | "version_prepared"
 
 export type ReleaseWorkflowDependencies = {
   build: () => Promise<void>
@@ -57,6 +72,7 @@ export type ReleaseWorkflowDependencies = {
   loadSession: () => Promise<ReleaseSession | null>
   log: (event: ReleaseWorkflowEvent, details?: Record<string, string>) => void
   now: () => string
+  prepareVersion: (bump: ReleaseVersionBump) => Promise<string | null>
   promptForEnsUpdate: (session: ReleaseSession) => Promise<void>
   publishIpfs: () => Promise<IpfsReleaseRecord>
   readEnsCid: () => Promise<string | null>
@@ -70,7 +86,15 @@ export type ReleaseWorkflowDependencies = {
 export async function runReleaseWorkflow(
   args: ReleaseArgs,
   dependencies: ReleaseWorkflowDependencies,
-): Promise<ReleaseSession> {
+): Promise<ReleaseSession | null> {
+  if (!args.resume) {
+    const preparedVersion = await dependencies.prepareVersion(args.bump)
+    if (preparedVersion) {
+      dependencies.log("version_prepared", { version: preparedVersion })
+      return null
+    }
+  }
+
   const head = await dependencies.getHead()
   await dependencies.ensurePreflight(args.resume)
 
@@ -235,6 +259,7 @@ function ensureTrailingSlash(value: string): string {
 }
 
 type CommandOptions = {
+  input?: string
   quiet?: boolean
   secrets?: string[]
 }
@@ -249,6 +274,7 @@ async function main() {
   try {
     const args = parseReleaseArgs(process.argv.slice(2))
     const environment = await loadEnvironment()
+    applyEnvironment(environment)
     secrets = collectSecrets(environment)
     const releasePrompt = createInterface({ input: process.stdin, output: process.stdout })
     prompt = releasePrompt
@@ -263,13 +289,57 @@ async function main() {
     })
 
     const dependencies: ReleaseWorkflowDependencies = {
+      prepareVersion: async (bump) => {
+        const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as Record<string, unknown>
+        if (packageJson.name !== "safecafe" || typeof packageJson.version !== "string") {
+          throw new Error("Run the release wizard from the Safecafe repository root.")
+        }
+        const safeLitePackageJson = JSON.parse(await readFile(safeLitePackageJsonPath, "utf8")) as Record<
+          string,
+          unknown
+        >
+        if (safeLitePackageJson.name !== "@safecafe/safe-lite" || typeof safeLitePackageJson.version !== "string") {
+          throw new Error("Invalid packages/safe-lite/package.json release metadata.")
+        }
+        const status = (await runCommand("git", ["status", "--short"], { quiet: true, secrets })).trim()
+        if (status) throw new Error(`Git worktree must be clean before preparing a release version.\n${status}`)
+
+        const latestVersion = await readLatestReleaseVersion()
+        const plan = planReleaseVersion(packageJson.version, latestVersion, bump)
+        const targetVersion = plan.action === "prepare" ? plan.nextVersion : plan.version
+        const expectedVersionModule = renderSafecafeVersionModule(targetVersion)
+        const currentVersionModule = await readFile(uiVersionPath, "utf8")
+        const packageNeedsUpdate = plan.action === "prepare"
+        const safeLiteNeedsUpdate = safeLitePackageJson.version !== targetVersion
+        const uiNeedsUpdate = currentVersionModule !== expectedVersionModule
+
+        if (!packageNeedsUpdate && !safeLiteNeedsUpdate && !uiNeedsUpdate) {
+          logger.success(
+            latestVersion
+              ? `发布版本 ${targetVersion} 已高于线上版本 ${latestVersion}`
+              : `首个发布版本使用 ${targetVersion}`,
+          )
+          return null
+        }
+
+        if (packageNeedsUpdate) {
+          packageJson.version = targetVersion
+          await writeJsonAtomic(packageJsonPath, packageJson)
+        }
+        if (safeLiteNeedsUpdate) {
+          safeLitePackageJson.version = targetVersion
+          await writeJsonAtomic(safeLitePackageJsonPath, safeLitePackageJson)
+        }
+        if (uiNeedsUpdate) await writeTextAtomic(uiVersionPath, expectedVersionModule)
+        return targetVersion
+      },
       getHead: async () => {
         currentHead = (await runCommand("git", ["rev-parse", "HEAD"], { quiet: true, secrets })).trim()
         return currentHead
       },
       ensurePreflight: async (resume) => {
         logger.section("发布前检查")
-        const packageJson = JSON.parse(await readFile(resolve("package.json"), "utf8")) as { name?: unknown }
+        const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as { name?: unknown }
         if (packageJson.name !== "safecafe")
           throw new Error("Run the release wizard from the Safecafe repository root.")
         branch =
@@ -286,6 +356,15 @@ async function main() {
         logger.keyValue("Commit", currentHead)
         logger.keyValue("Cloudflare 项目", projectName)
         logger.keyValue("ENS", ensName)
+        logger.keyValue(
+          "环境来源",
+          releaseEnvFileFound ? ".env 发布配置优先，缺失项不从 shell 继承" : "未找到 .env，使用当前 shell 环境",
+        )
+        logger.keyValue(
+          "前端 API Base",
+          environment.VITE_API_BASE_URL?.trim() || "same-origin / static hosted fallback",
+        )
+        logger.keyValue("前端 Agent Auth", environment.VITE_AGENT_AUTH?.trim() || "default")
       },
       confirmRelease: async () => {
         const answer = await releasePrompt.question("\n确认开始生产发布？输入 yes 继续: ")
@@ -330,10 +409,31 @@ async function main() {
         logger.success("Filebase 与 dweb.link 的页面和发布清单均可访问")
       },
       deployCloudflare: async () => {
+        logger.section("同步 Cloudflare Pages 服务端配置")
+        const runtimeSecrets = collectCloudflarePagesSecrets(environment)
+        const emptyRuntimeSecrets = cloudflarePagesRuntimeSecretNames.filter((name) => !environment[name]?.trim())
+        if (runtimeSecrets.length) {
+          logger.info(`以 .env / shell 环境为准，同步 ${runtimeSecrets.length} 个非空 runtime 配置`)
+        }
+        for (const { name, value } of runtimeSecrets) {
+          await runCommand(
+            "pnpm",
+            ["exec", "wrangler", "pages", "secret", "put", name, "--project-name", projectName],
+            { input: `${value}\n`, secrets },
+          )
+          logger.success(`已同步 ${name}`)
+        }
+        if (runtimeSecrets.length === 0) logger.warning("未发现可同步的 Cloudflare runtime 配置")
+        if (emptyRuntimeSecrets.length) {
+          logger.warning(
+            `以下 runtime 配置为空，release 不会删除 Cloudflare 线上旧值: ${emptyRuntimeSecrets.join(", ")}`,
+          )
+        }
+
         logger.section("部署 Cloudflare Pages")
         const output = await runCommand(
           "pnpm",
-          ["exec", "wrangler", "pages", "deploy", "dist", "--project-name", projectName],
+          ["exec", "wrangler", "pages", "deploy", "dist", "--project-name", projectName, "--commit-dirty=true"],
           { secrets },
         )
         const deploymentUrl = extractCloudflareDeploymentUrl(output)
@@ -381,6 +481,8 @@ async function main() {
           logger.warning(`ENS 查询暂时失败，将继续重试: ${redactReleaseError(details?.error ?? "unknown", secrets)}`)
         } else if (event === "final_check_error") {
           logger.warning(`线上端点尚未同步，将继续重试: ${redactReleaseError(details?.error ?? "unknown", secrets)}`)
+        } else if (event === "version_prepared") {
+          logger.versionPrepared(details?.version ?? "unknown")
         } else {
           logger.complete(sessionPath)
         }
@@ -450,6 +552,14 @@ function createReleaseLogger() {
       line("    生成的 release records 仍需人工审查和提交。")
       line("")
     },
+    versionPrepared(version: string) {
+      line("")
+      line(paint(32, `  ✓ 已准备发布版本 ${version}`))
+      line("    已同步根 package、safe-lite package 与前端/CLI 版本常量。")
+      line("    请审查并提交版本变更，然后再次运行 pnpm release。")
+      line("    此阶段未执行构建、上传、部署或 ENS 操作。")
+      line("")
+    },
   }
 }
 
@@ -471,7 +581,7 @@ function runCommand(command: string, args: string[], options: CommandOptions = {
     const child = spawn(command, args, {
       cwd: process.cwd(),
       env: process.env,
-      stdio: ["inherit", "pipe", "pipe"],
+      stdio: [options.input === undefined ? "inherit" : "pipe", "pipe", "pipe"],
     })
     let output = ""
     const stdoutRedactor = createReleaseOutputRedactor(options.secrets ?? [], (value) => process.stdout.write(value))
@@ -486,8 +596,9 @@ function runCommand(command: string, args: string[], options: CommandOptions = {
       stdoutRedactor.flush()
       stderrRedactor.flush()
     }
-    child.stdout.on("data", (chunk: Buffer) => collect(chunk, stdoutRedactor))
-    child.stderr.on("data", (chunk: Buffer) => collect(chunk, stderrRedactor))
+    child.stdout?.on("data", (chunk: Buffer) => collect(chunk, stdoutRedactor))
+    child.stderr?.on("data", (chunk: Buffer) => collect(chunk, stderrRedactor))
+    if (options.input !== undefined) child.stdin?.end(options.input)
     child.on("error", (error) => {
       flush()
       rejectCommand(error)
@@ -505,20 +616,43 @@ function runCommand(command: string, args: string[], options: CommandOptions = {
 
 async function loadEnvironment(): Promise<NodeJS.ProcessEnv> {
   const values: NodeJS.ProcessEnv = { ...process.env }
+  const envFileKeys = new Set<string>()
   try {
     const source = await readFile(resolve(".env"), "utf8")
+    releaseEnvFileFound = true
     for (const line of source.split(/\r?\n/)) {
       const trimmed = line.trim()
       if (!trimmed || trimmed.startsWith("#")) continue
       const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
       if (!match) continue
       const [, key, rawValue] = match
-      if (key && !values[key]) values[key] = unquote(rawValue?.trim() ?? "")
+      if (key) {
+        envFileKeys.add(key)
+        values[key] = unquote(rawValue?.trim() ?? "")
+      }
     }
   } catch (error) {
     if (!isNodeError(error) || error.code !== "ENOENT") throw error
   }
+  if (releaseEnvFileFound) {
+    for (const key of Object.keys(values)) {
+      if (isReleaseConfigEnvironmentName(key) && !envFileKeys.has(key)) delete values[key]
+    }
+  }
   return values
+}
+
+function applyEnvironment(environment: NodeJS.ProcessEnv) {
+  for (const key of Object.keys(process.env)) {
+    if (isReleaseConfigEnvironmentName(key) && !(key in environment)) delete process.env[key]
+  }
+  for (const [key, value] of Object.entries(environment)) {
+    if (typeof value === "string") process.env[key] = value
+  }
+}
+
+function isReleaseConfigEnvironmentName(name: string) {
+  return name.startsWith("SAFECAFE_") || name.startsWith("VITE_") || name.startsWith("FILEBASE_")
 }
 
 function assertRequiredEnvironment(environment: NodeJS.ProcessEnv) {
@@ -558,6 +692,27 @@ async function writeJsonAtomic(path: string, value: unknown) {
   const temporaryPath = `${path}.tmp`
   await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8")
   await rename(temporaryPath, path)
+}
+
+async function writeTextAtomic(path: string, value: string) {
+  await mkdir(dirname(path), { recursive: true })
+  const temporaryPath = `${path}.tmp`
+  await writeFile(temporaryPath, value, "utf8")
+  await rename(temporaryPath, path)
+}
+
+async function readLatestReleaseVersion(): Promise<string | null> {
+  for (const path of latestReleaseRecordPaths) {
+    try {
+      const record = JSON.parse(await readFile(path, "utf8")) as { version?: unknown }
+      if (typeof record.version !== "string") throw new Error(`Release record ${path} does not contain a version.`)
+      return record.version
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") continue
+      throw error
+    }
+  }
+  return null
 }
 
 async function fileExists(path: string): Promise<boolean> {
