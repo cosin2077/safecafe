@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true
+  },
+  "include": ["../release.ts", "../release-test.ts", "./core.ts", "./core-test.ts"]
+}

@@ -176,6 +176,14 @@ The output in `dist/` can be deployed to Cloudflare Pages, IPFS-style static hos
 
 Cloudflare Pages is the recommended primary public host. Filebase/IPFS is used for immutable release snapshots, and `safe-staking.eth` is configured to resolve through `https://safe-staking.eth.limo/` after its ENS contenthash points to the current `ipfs://<CID>`. See [CLOUDFLARE.md](CLOUDFLARE.md) for the full development, Cloudflare deployment, IPFS publishing, ENS update, and verification flow.
 
+Maintainers can run the interactive production release wizard with:
+
+```bash
+pnpm release
+```
+
+It publishes one build to IPFS and Cloudflare, pauses for the required manual `safe-staking.eth` contenthash update, then keeps checking ENS and the public endpoints until they all point to the same CID. Interrupted sessions can continue with `pnpm release --resume`; the wizard never updates ENS or commits release records automatically.
+
 <!-- ipfs-latest:start -->
 ## Latest IPFS Release
 

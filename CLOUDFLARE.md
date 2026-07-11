@@ -36,13 +36,47 @@ pnpm test:e2e:live-mock
 
 ## Release Order
 
-Use this order for a production release:
+Use the interactive release wizard for a production release:
+
+```bash
+pnpm release
+```
+
+The wizard:
+
+1. Requires a clean Git worktree and checks pnpm, Wrangler authentication, and Filebase credentials.
+2. Runs release checks and creates one production build.
+3. Publishes that build to Filebase/IPFS and verifies it through two gateways.
+4. Deploys the same `dist/` directory to Cloudflare Pages.
+5. Prints the exact `ipfs://<CID>` required for `safe-staking.eth` and pauses for the manual ENS transaction.
+6. After you press Enter, repeatedly reads the Ethereum mainnet ENS resolver until the contenthash matches.
+7. Continues checking Cloudflare and `safe-staking.eth.limo` while gateway caches settle, then prints a final success summary.
+
+The wizard never handles an ENS private key, sends an ENS transaction, commits Git changes, or prints secret environment-variable values.
+
+Supported options:
+
+```bash
+pnpm release --resume
+pnpm release --yes
+pnpm release --quick
+pnpm release --poll-interval=30
+```
+
+- `--resume` continues the session stored in `dist/release-session.json`. It validates that the saved commit still matches `HEAD` and skips completed upload/deploy stages.
+- `--yes` skips only the initial release confirmation. Manual ENS confirmation is always required.
+- `--quick` runs `pnpm check` instead of the full Agent, integration, and system release checks.
+- `--poll-interval=<seconds>` changes the ENS and endpoint verification interval. Default: `15`; minimum: `5`.
+
+Press `Ctrl+C` while waiting for ENS to stop safely, then run `pnpm release --resume` later. The generated release records and documentation updates must still be reviewed and committed manually.
+
+The equivalent low-level order is:
 
 1. Finish code changes and review `git status --short`.
 2. Run checks and build.
-3. Deploy Cloudflare Pages as the primary mirror.
-4. Publish the same release to Filebase/IPFS.
-5. Verify the CID through at least two gateways.
+3. Publish the built `dist/` directory to Filebase/IPFS.
+4. Verify the CID through at least two gateways.
+5. Deploy that same `dist/` directory to Cloudflare Pages.
 6. Update the ENS contenthash for `safe-staking.eth` to `ipfs://<CID>`.
 7. Verify `https://safe-staking.eth.limo/`.
 8. Commit the generated release records and documentation updates.
