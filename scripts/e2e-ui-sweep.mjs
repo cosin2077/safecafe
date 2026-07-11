@@ -13,6 +13,20 @@ const baseUrl = process.env.E2E_BASE_URL || `http://127.0.0.1:${previewPort}`
 const outputDir = `output/playwright/ui-sweep-${new Date().toISOString().replace(/[:.]/g, "-")}`
 const account = privateKeyToAccount(`0x${"44".repeat(32)}`)
 const initialCoreStake = 20n * 10n ** 18n + 12_345_678_901_234_567n
+const responsiveViewports = [
+  { name: "phone-320x568", width: 320, height: 568 },
+  { name: "phone-360x800", width: 360, height: 800 },
+  { name: "tablet-768x1024", width: 768, height: 1024 },
+  { name: "edge-820x1180", width: 820, height: 1180 },
+  { name: "edge-821x1180", width: 821, height: 1180 },
+  { name: "landscape-900x700", width: 900, height: 700 },
+  { name: "tablet-1024x768", width: 1024, height: 768 },
+  { name: "edge-1180x820", width: 1180, height: 820 },
+  { name: "edge-1181x820", width: 1181, height: 820 },
+  { name: "desktop-1440x900", width: 1440, height: 900 },
+  { name: "desktop-1920x1080", width: 1920, height: 1080 },
+  { name: "desktop-2560x1440", width: 2560, height: 1440 },
+]
 
 await mkdir(outputDir, { recursive: true })
 logSweep(`starting e2e UI sweep rounds=${rounds} output=${outputDir}`)
@@ -75,6 +89,7 @@ try {
   for (let round = 1; round <= rounds; round += 1) {
     await runRound(browser, round)
   }
+  await runResponsiveMatrix(browser)
 } finally {
   if (browser) {
     await browser.close()
@@ -150,6 +165,65 @@ async function runRound(browser, round) {
     await context.close()
     logSweep(`round ${round}/${rounds} done`)
   }
+}
+
+async function runResponsiveMatrix(browser) {
+  logSweep(`responsive matrix start viewports=${responsiveViewports.length}`)
+  for (const viewport of responsiveViewports) {
+    const context = await browser.newContext({
+      viewport: { width: viewport.width, height: viewport.height },
+      isMobile: viewport.width <= 820,
+      reducedMotion: "reduce",
+    })
+    const page = await context.newPage()
+    const consoleErrors = []
+    page.on("console", (message) => {
+      const text = message.text()
+      if (message.type() === "error" && !text.includes("404 (Not Found)")) consoleErrors.push(text)
+    })
+    page.on("pageerror", (error) => {
+      consoleErrors.push(error.message)
+    })
+    try {
+      logSweep(`responsive ${viewport.name}: start`)
+      const chain = createMockChain({ account: account.address, coreStake: initialCoreStake })
+      const driver = createWebTestDriver({ account: account.address, baseUrl, chain, page })
+      await driver.install()
+      for (const route of [
+        { name: "dashboard", path: "/" },
+        { name: "validators", path: "/validators" },
+        { name: "settings", path: "/settings" },
+      ]) {
+        await page.goto(`${baseUrl}${route.path}`, { waitUntil: "networkidle" })
+        await responsiveScreenshot(page, viewport, route.name)
+      }
+      await clickRequired(page.locator(".agent-launcher"), `open Agent at ${viewport.name}`)
+      await page.getByRole("dialog", { name: "Staking Agent" }).waitFor({ state: "visible" })
+      await responsiveScreenshot(page, viewport, "agent", { fullPage: false })
+      if (consoleErrors.length > 0) {
+        recordFinding(issues, {
+          messages: consoleErrors,
+          type: "responsive-console-error",
+          viewport: viewport.name,
+        })
+      }
+      logSweep(`responsive ${viewport.name}: done`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      logSweep(`responsive ${viewport.name}: failed ${message}`)
+      recordFinding(issues, { message, type: "responsive-exception", viewport: viewport.name })
+      await page
+        .screenshot({
+          path: `${outputDir}/responsive-${viewport.name}-failure.png`,
+          animations: "disabled",
+          fullPage: true,
+        })
+        .catch(() => undefined)
+    } finally {
+      await context.close()
+    }
+  }
+  logSweep("responsive matrix done")
 }
 
 async function exerciseLanguageMenu(page, round) {
@@ -319,6 +393,229 @@ async function screenshot(page, round, name) {
   if (findingDelta > 0) logSweep(`round ${round}: ${name} added ${findingDelta} unique finding(s)`)
 }
 
+async function responsiveScreenshot(page, viewport, route, options = {}) {
+  const step = `responsive-${viewport.name}-${route}`
+  const findingCountBefore = issues.length + warnings.length
+  logSweep(`capturing ${step}`)
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await wait(100)
+  await collectLayoutIssues(page, viewport.name, route)
+  await collectResponsiveIssuesAtScrollPositions(page, viewport, route)
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await wait(50)
+  await page.screenshot({
+    path: `${outputDir}/${step}.png`,
+    animations: "disabled",
+    fullPage: options.fullPage ?? true,
+  })
+  const findingDelta = issues.length + warnings.length - findingCountBefore
+  if (findingDelta > 0) logSweep(`${step} added ${findingDelta} unique finding(s)`)
+}
+
+async function collectResponsiveIssuesAtScrollPositions(page, viewport, route) {
+  const maximumScroll = await page.evaluate(() =>
+    Math.max(0, document.documentElement.scrollHeight - window.innerHeight),
+  )
+  const positions = [
+    { name: "top", y: 0 },
+    { name: "middle", y: Math.round(maximumScroll / 2) },
+    { name: "bottom", y: maximumScroll },
+  ].filter((position, index, values) => values.findIndex((candidate) => candidate.y === position.y) === index)
+
+  for (const position of positions) {
+    await page.evaluate((scrollY) => window.scrollTo(0, scrollY), position.y)
+    await wait(50)
+    await collectResponsiveIssues(page, viewport, route, position.name)
+  }
+}
+
+async function collectResponsiveIssues(page, viewport, route, scrollPosition) {
+  const report = await page.evaluate(() => {
+    const isVisible = (element) => {
+      if (!(element instanceof HTMLElement)) return false
+      const rect = element.getBoundingClientRect()
+      const style = window.getComputedStyle(element)
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity !== "0" &&
+        style.pointerEvents !== "none" &&
+        element.getAttribute("aria-hidden") !== "true"
+      )
+    }
+    const describe = (element) =>
+      element.getAttribute("aria-label") ||
+      element.getAttribute("title") ||
+      element.textContent?.trim().replace(/\s+/g, " ").slice(0, 80) ||
+      (typeof element.className === "string" ? element.className : element.tagName)
+    const intersects = (first, second, tolerance = 1) =>
+      first.left < second.right - tolerance &&
+      first.right > second.left + tolerance &&
+      first.top < second.bottom - tolerance &&
+      first.bottom > second.top + tolerance
+    const interactive = Array.from(document.querySelectorAll("button, a, input, textarea, [role='button']")).filter(
+      isVisible,
+    )
+    const clippedInteractiveElements = interactive
+      .filter((element) => {
+        const rect = element.getBoundingClientRect()
+        return rect.left < -1 || rect.right > window.innerWidth + 1
+      })
+      .map((element) => ({ label: describe(element), rect: element.getBoundingClientRect().toJSON() }))
+      .slice(0, 12)
+
+    const launcher = document.querySelector(".agent-launcher")
+    const launcherRect = isVisible(launcher) ? launcher.getBoundingClientRect() : null
+    const launcherInteractiveOverlaps = launcherRect
+      ? interactive
+          .filter((element) => element !== launcher && !launcher.contains(element))
+          .filter((element) => intersects(launcherRect, element.getBoundingClientRect(), 3))
+          .map((element) => ({ label: describe(element), rect: element.getBoundingClientRect().toJSON() }))
+          .slice(0, 12)
+      : []
+
+    const dialog = document.querySelector(".agent-dialog")
+    const dialogRect = isVisible(dialog) ? dialog.getBoundingClientRect() : null
+    const dialogViewportOverflow = dialogRect
+      ? {
+          bottom: Math.max(0, dialogRect.bottom - window.innerHeight),
+          left: Math.max(0, -dialogRect.left),
+          right: Math.max(0, dialogRect.right - window.innerWidth),
+          top: Math.max(0, -dialogRect.top),
+        }
+      : null
+
+    const elementOverlaps = []
+    for (const container of document.querySelectorAll(".validator-row, .position-row")) {
+      if (!isVisible(container)) continue
+      const children = Array.from(container.children).filter(isVisible)
+      for (let firstIndex = 0; firstIndex < children.length; firstIndex += 1) {
+        for (let secondIndex = firstIndex + 1; secondIndex < children.length; secondIndex += 1) {
+          const first = children[firstIndex]
+          const second = children[secondIndex]
+          if (intersects(first.getBoundingClientRect(), second.getBoundingClientRect(), 4)) {
+            elementOverlaps.push({ first: describe(first), second: describe(second) })
+          }
+        }
+      }
+    }
+
+    const overflowingLayoutItems = Array.from(
+      document.querySelectorAll(
+        ".validator-stat, .validator-row-actions, .position-main, .position-amount, .status-badge",
+      ),
+    )
+      .filter(isVisible)
+      .filter((element) => {
+        const overflowX = element.scrollWidth - element.clientWidth
+        const overflowY = element.scrollHeight - element.clientHeight
+        const materialOverflowX = overflowX > Math.max(4, element.clientWidth * 0.08)
+        const materialOverflowY = overflowY > Math.max(4, element.clientHeight * 0.08)
+        return materialOverflowX || materialOverflowY
+      })
+      .map((element) => ({
+        className: typeof element.className === "string" ? element.className : element.tagName,
+        clientHeight: element.clientHeight,
+        clientWidth: element.clientWidth,
+        label: describe(element),
+        scrollHeight: element.scrollHeight,
+        scrollWidth: element.scrollWidth,
+      }))
+      .slice(0, 12)
+
+    return {
+      clippedInteractiveElements,
+      dialogViewportOverflow,
+      documentOverflow: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+      elementOverlaps: elementOverlaps.slice(0, 12),
+      launcherInteractiveOverlaps,
+      overflowingLayoutItems,
+    }
+  })
+
+  const keyPrefix = `${viewport.name}:${route}`
+  const isTopPosition = scrollPosition === "top"
+  if (isTopPosition && report.documentOverflow > 1) {
+    recordFinding(
+      issues,
+      {
+        overflowWidth: report.documentOverflow,
+        route,
+        type: "responsive-horizontal-overflow",
+        viewport: viewport.name,
+      },
+      `${keyPrefix}:document-overflow`,
+    )
+  }
+  if (isTopPosition && report.clippedInteractiveElements.length > 0) {
+    recordFinding(
+      issues,
+      {
+        elements: report.clippedInteractiveElements,
+        route,
+        type: "responsive-clipped-interactive",
+        viewport: viewport.name,
+      },
+      `${keyPrefix}:clipped-interactive`,
+    )
+  }
+  if (report.launcherInteractiveOverlaps.length > 0) {
+    recordFinding(
+      issues,
+      {
+        elements: report.launcherInteractiveOverlaps,
+        route,
+        scrollPosition,
+        type: "responsive-launcher-overlap",
+        viewport: viewport.name,
+      },
+      `${keyPrefix}:${scrollPosition}:launcher-overlap`,
+    )
+  }
+  if (
+    isTopPosition &&
+    report.dialogViewportOverflow &&
+    Object.values(report.dialogViewportOverflow).some((overflow) => overflow > 1)
+  ) {
+    recordFinding(
+      issues,
+      {
+        overflow: report.dialogViewportOverflow,
+        route,
+        type: "responsive-dialog-overflow",
+        viewport: viewport.name,
+      },
+      `${keyPrefix}:dialog-overflow`,
+    )
+  }
+  if (isTopPosition && report.elementOverlaps.length > 0) {
+    recordFinding(
+      issues,
+      {
+        elements: report.elementOverlaps,
+        route,
+        type: "responsive-element-overlap",
+        viewport: viewport.name,
+      },
+      `${keyPrefix}:element-overlap`,
+    )
+  }
+  if (isTopPosition && report.overflowingLayoutItems.length > 0) {
+    recordFinding(
+      issues,
+      {
+        elements: report.overflowingLayoutItems,
+        route,
+        type: "responsive-content-overflow",
+        viewport: viewport.name,
+      },
+      `${keyPrefix}:content-overflow`,
+    )
+  }
+}
+
 async function collectLayoutIssues(page, round, name) {
   const report = await page.evaluate(() => {
     const viewportWidth = window.innerWidth
@@ -337,6 +634,9 @@ async function collectLayoutIssues(page, round, name) {
         rect.height <= 0 ||
         style.visibility === "hidden" ||
         style.display === "none" ||
+        style.opacity === "0" ||
+        style.pointerEvents === "none" ||
+        element.getAttribute("aria-hidden") === "true" ||
         rect.bottom < 0 ||
         rect.top > window.innerHeight
       ) {

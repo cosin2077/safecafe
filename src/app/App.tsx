@@ -2392,7 +2392,7 @@ export function App() {
           />
         )}
         {activeNav === "validators" && (
-          <FullPanel>
+          <FullPanel className="validators-panel">
             <ValidatorToolbar
               activeOnly={showOnlyActive}
               isLoading={isLoadingValidators}

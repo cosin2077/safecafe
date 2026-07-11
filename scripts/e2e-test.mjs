@@ -881,11 +881,35 @@ try {
   await dialog.waitFor({ state: "visible" })
   await dialog.getByRole("button", { name: "Close agent" }).click()
   await dialog.waitFor({ state: "hidden" })
+  await page.waitForTimeout(250)
+  const mobileTapBox = await launcher.boundingBox()
+  if (!mobileTapBox) throw new Error("Expected compact mobile launcher to stay visible before tap jitter test")
+  const tapX = mobileTapBox.x + mobileTapBox.width / 2
+  const tapY = mobileTapBox.y + mobileTapBox.height / 2
+  await page.mouse.move(tapX, tapY)
+  await page.mouse.down()
+  await page.mouse.move(tapX - 8, tapY)
+  await page.mouse.move(tapX - 2, tapY)
+  await page.mouse.up()
+  await dialog.waitFor({ state: "visible", timeout: 1_000 })
+  await dialog.getByRole("button", { name: "Close agent" }).click()
+  await dialog.waitFor({ state: "hidden" })
+  await page.waitForTimeout(250)
   const mobileBeforeDrag = await launcher.boundingBox()
   await launcher.dragTo(page.locator("body"), { targetPosition: { x: 180, y: 540 }, force: true })
+  await page.waitForTimeout(250)
   const mobileAfterDrag = await launcher.boundingBox()
-  if (!mobileBeforeDrag || !mobileAfterDrag || Math.abs(mobileAfterDrag.x - mobileBeforeDrag.x) < 40) {
-    throw new Error("Expected mobile launcher drag to change position")
+  if (!mobileBeforeDrag || !mobileAfterDrag) throw new Error("Expected compact mobile launcher to stay visible")
+  if (
+    Math.abs(mobileAfterDrag.x - mobileBeforeDrag.x) > 1 ||
+    Math.abs(mobileAfterDrag.y - mobileBeforeDrag.y) > 1 ||
+    Math.abs(mobileAfterDrag.width - 44) > 1 ||
+    Math.abs(mobileAfterDrag.height - 44) > 1 ||
+    Math.abs(mobileAfterDrag.x + mobileAfterDrag.width - 390) > 1
+  ) {
+    throw new Error(
+      `Expected mobile launcher to remain a fixed 44px edge tab: before=${JSON.stringify(mobileBeforeDrag)} after=${JSON.stringify(mobileAfterDrag)}`,
+    )
   }
   await launcher.click()
   await dialog.waitFor({ state: "visible" })

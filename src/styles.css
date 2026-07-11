@@ -2938,6 +2938,8 @@ textarea:focus-visible {
   grid-column: 1 / -1;
   padding: 0;
   overflow: hidden;
+  container-name: validators-panel;
+  container-type: inline-size;
 }
 
 .validators-panel .panel-title {
@@ -3990,6 +3992,12 @@ textarea:focus-visible {
 .agent-launcher.fixed:hover,
 .agent-launcher.fixed:focus-visible {
   opacity: 1;
+}
+
+@media (min-width: 1181px) and (max-width: 1280px) {
+  .agent-launcher.fixed {
+    right: max(8px, env(safe-area-inset-right));
+  }
 }
 
 .agent-launcher-dot {
@@ -5050,6 +5058,69 @@ textarea:focus-visible {
   justify-content: center;
 }
 
+@container validators-panel (max-width: 1040px) {
+  .validator-header {
+    display: none;
+  }
+
+  .validator-list {
+    overflow: visible;
+  }
+
+  .validator-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "identity status"
+      "commission participation"
+      "total your"
+      "actions actions";
+    gap: 14px 16px;
+    min-width: 0;
+    min-height: 0;
+    padding-block: 18px;
+  }
+
+  .validator-row .validator-identity {
+    grid-area: identity;
+  }
+
+  .validator-row > .validator-stat:nth-child(2) {
+    grid-area: commission;
+  }
+
+  .validator-row > .validator-stat:nth-child(3) {
+    grid-area: participation;
+  }
+
+  .validator-row > .validator-stat:nth-child(4) {
+    grid-area: total;
+  }
+
+  .validator-row > .validator-stat:nth-child(5) {
+    grid-area: your;
+  }
+
+  .validator-row .status-badge {
+    grid-area: status;
+  }
+
+  .validator-row-actions {
+    grid-area: actions;
+    justify-content: stretch;
+  }
+
+  .validator-row-actions .primary-button,
+  .validator-action-tooltip,
+  .secondary-action-button {
+    flex: 1;
+  }
+
+  .validator-row-actions .row-arrow {
+    flex: 0 0 44px;
+    min-height: 44px;
+  }
+}
+
 @media (max-width: 1180px) {
   :root {
     --sidebar-width: 236px;
@@ -5097,18 +5168,23 @@ textarea:focus-visible {
     grid-column: auto;
   }
 
-  .validator-header,
-  .validator-row {
-    min-width: 1000px;
-    padding-inline: 20px;
-  }
-
   .validator-toolbar {
     grid-template-columns: 1fr 180px;
   }
 
   .validator-data-note {
     justify-items: start;
+  }
+
+  .agent-launcher.fixed {
+    top: auto;
+    right: max(0px, env(safe-area-inset-right));
+    bottom: max(16px, env(safe-area-inset-bottom));
+    left: auto;
+    width: 44px;
+    height: 44px;
+    border-radius: 14px 0 0 14px;
+    opacity: 0.88;
   }
 
   .llm-settings-panel {
@@ -5401,7 +5477,7 @@ textarea:focus-visible {
   }
 
   .page {
-    padding: 24px 16px;
+    padding: 24px 16px max(96px, calc(72px + env(safe-area-inset-bottom)));
   }
 
   .summary-grid {
@@ -5466,72 +5542,6 @@ textarea:focus-visible {
     grid-template-columns: 1fr;
   }
 
-  .validator-header,
-  .validator-row {
-    grid-template-columns: 1fr auto;
-    min-width: 0;
-    padding-inline: 16px;
-  }
-
-  .validator-list {
-    overflow: visible;
-  }
-
-  .validator-header {
-    display: none;
-  }
-
-  .validator-row {
-    grid-template-areas:
-      "identity status"
-      "commission participation"
-      "total your"
-      "actions actions";
-    gap: 14px 16px;
-    min-height: 0;
-    padding-block: 18px;
-  }
-
-  .validator-row .validator-identity {
-    grid-area: identity;
-  }
-
-  .validator-row > .validator-stat:nth-child(2) {
-    grid-area: commission;
-  }
-
-  .validator-row > .validator-stat:nth-child(3) {
-    grid-area: participation;
-  }
-
-  .validator-row > .validator-stat:nth-child(4) {
-    grid-area: total;
-  }
-
-  .validator-row > .validator-stat:nth-child(5) {
-    grid-area: your;
-  }
-
-  .validator-row .status-badge {
-    grid-area: status;
-  }
-
-  .validator-row-actions {
-    grid-area: actions;
-    justify-content: stretch;
-  }
-
-  .validator-row-actions .primary-button,
-  .validator-action-tooltip,
-  .secondary-action-button {
-    flex: 1;
-  }
-
-  .validator-row-actions .row-arrow {
-    flex: 0 0 44px;
-    min-height: 44px;
-  }
-
   .validator-identity strong {
     font-size: 20px;
   }
@@ -5547,21 +5557,6 @@ textarea:focus-visible {
   .donut {
     width: 220px;
     height: 220px;
-  }
-
-  .agent-launcher.fixed {
-    top: auto;
-    right: max(16px, env(safe-area-inset-right));
-    bottom: calc(max(18px, env(safe-area-inset-bottom)) + 72px);
-    left: auto;
-    width: 50px;
-    height: 50px;
-    opacity: 0.9;
-  }
-
-  .agent-launcher.fixed:hover,
-  .agent-launcher.fixed:focus-visible {
-    opacity: 1;
   }
 
   .agent-dialog {
@@ -5625,5 +5620,45 @@ textarea:focus-visible {
   .agent-message-list,
   .agent-session-list {
     scrollbar-gutter: auto;
+  }
+}
+
+@media (max-width: 420px) {
+  .validator-row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "identity"
+      "status"
+      "participation"
+      "commission"
+      "total"
+      "your"
+      "actions";
+  }
+
+  .validator-row .status-badge {
+    width: fit-content;
+    justify-self: start;
+  }
+
+  .validator-row-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px;
+    width: 100%;
+  }
+
+  .validator-row-actions .primary-button,
+  .validator-action-tooltip,
+  .secondary-action-button {
+    width: 100%;
+  }
+
+  .position-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .position-amount {
+    grid-column: 2;
+    justify-items: start;
   }
 }
