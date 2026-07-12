@@ -1,13 +1,13 @@
 {
   "name": "safecafe",
-  "version": "0.1.1",
-  "createdAt": "2026-07-11T08:36:19.720Z",
-  "commit": "d18bf5de4bb33faa6b99b9fbfcaeffc63e7dd95f",
+  "version": "0.2.0",
+  "createdAt": "2026-07-12T05:51:07.889Z",
+  "commit": "cddd8b132ca3adb561a0c4bcb9e1e989961a8692",
   "dirty": false,
   "build": {
     "command": "pnpm build:web",
     "packageManager": "pnpm@11.0.0-rc.0",
-    "publishedBytes": 976481,
+    "publishedBytes": 976241,
     "maxBytes": 1500000,
     "excludedFiles": []
   },
@@ -28,24 +28,24 @@
       "sha256": "6036983e5fc00f0169c9e939b1816ed771eee00e27f2fcc517b819041460b9ef"
     },
     {
-      "path": "assets/icons-ZAhBz4kC.js",
-      "size": 17798,
-      "sha256": "3c3da17aef51971ac0beb4a1048f03e8d87ef69737fcd0e7f4bdbfe2c82ccedd"
+      "path": "assets/icons-rO-vG4Q3.js",
+      "size": 18175,
+      "sha256": "b765e306284d57e75e5ee9dc2d9b556ad034495a91b522ac4d35a83d36b7c47b"
     },
     {
-      "path": "assets/index-d2hg4HP3.js",
-      "size": 602168,
-      "sha256": "f15cb9db8bd586214f523e9f87a295c63b68f2611b46194dddcc33daad0580a0"
+      "path": "assets/index-BokO9Gvh.css",
+      "size": 81837,
+      "sha256": "94ced7b6e0d41cad1635835a28dd137e78e930b25f0e3beff341856de18e779c"
     },
     {
-      "path": "assets/index-DSeXTMvR.css",
-      "size": 82022,
-      "sha256": "6ffeb7d85e31dceaf8f995fa5ea3d9d46429405e35b185d58d7254ee5a7e6e80"
+      "path": "assets/index-DnHFruuS.js",
+      "size": 601736,
+      "sha256": "89b999c8db4fe9424790e9141759542e902b62a1e3fb249aab24af35bed85e39"
     },
     {
-      "path": "assets/react-BnWYwbxt.js",
+      "path": "assets/react-BnuBQDKI.js",
       "size": 3654,
-      "sha256": "749353398100267a6ee5bc8b591d91eeb789179821b8dcc73696d504883fa3a0"
+      "sha256": "2692560642a1100a2709049adcb9d2f787dd65969de0328101d83e0dc7c6db1f"
     },
     {
       "path": "assets/viem-BL6siVdY.js",
@@ -60,7 +60,7 @@
     {
       "path": "index.html",
       "size": 2168,
-      "sha256": "0d08d763b9d04b7222430d35f81b24db400dc2553a2b439c8f5ea5d0ed1ed085"
+      "sha256": "27c5e26690d9d189395f16f1a42236f7d5e41bb7189a26f0ebc499f6278990c3"
     },
     {
       "path": "manifest.json",
@@ -69,12 +69,12 @@
     }
   ],
   "ipfs": {
-    "cid": "bafybeidy667zssrip3u4tuzxj2zx5fpfaksvfchye2k4v4ngsmc6tnogum",
-    "uri": "ipfs://bafybeidy667zssrip3u4tuzxj2zx5fpfaksvfchye2k4v4ngsmc6tnogum",
+    "cid": "bafybeidm3vzcww42dzwvqrmdxcbup4zlhvsvdi6gvazg7xsrygwbaqvptq",
+    "uri": "ipfs://bafybeidm3vzcww42dzwvqrmdxcbup4zlhvsvdi6gvazg7xsrygwbaqvptq",
     "gateways": {
-      "filebase": "https://ipfs.filebase.io/ipfs/bafybeidy667zssrip3u4tuzxj2zx5fpfaksvfchye2k4v4ngsmc6tnogum/",
-      "ipfsIo": "https://ipfs.io/ipfs/bafybeidy667zssrip3u4tuzxj2zx5fpfaksvfchye2k4v4ngsmc6tnogum/",
-      "dweb": "https://bafybeidy667zssrip3u4tuzxj2zx5fpfaksvfchye2k4v4ngsmc6tnogum.ipfs.dweb.link/",
+      "filebase": "https://ipfs.filebase.io/ipfs/bafybeidm3vzcww42dzwvqrmdxcbup4zlhvsvdi6gvazg7xsrygwbaqvptq/",
+      "ipfsIo": "https://ipfs.io/ipfs/bafybeidm3vzcww42dzwvqrmdxcbup4zlhvsvdi6gvazg7xsrygwbaqvptq/",
+      "dweb": "https://bafybeidm3vzcww42dzwvqrmdxcbup4zlhvsvdi6gvazg7xsrygwbaqvptq.ipfs.dweb.link/",
       "ethLimo": "https://safe-staking.eth.limo/"
     }
   }
