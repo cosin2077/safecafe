@@ -1,4 +1,5 @@
 import { type Hex, hexToBytes } from "viem"
+import { cloudflarePagesRuntimeSecretNames } from "../../src/server/envNames"
 
 export type ReleaseArgs = {
   bump: ReleaseVersionBump
@@ -30,34 +31,6 @@ export type ReleaseOutputRedactor = {
   flush: () => void
   write: (value: string) => void
 }
-
-export const cloudflarePagesRuntimeSecretNames = [
-  "SAFECAFE_AUTH_SECRET",
-  "SAFECAFE_RPC_ALLOW_ALL_WALLETS",
-  "SAFECAFE_API_ALLOWED_ORIGINS",
-  "SAFECAFE_RPC_URL",
-  "SAFECAFE_RPC_URLS",
-  "SAFECAFE_API_IP_RATE_LIMIT_PER_MINUTE",
-  "SAFECAFE_AGENT_IP_RATE_LIMIT_PER_MINUTE",
-  "SAFECAFE_AGENT_FEEDBACK_IP_RATE_LIMIT_PER_MINUTE",
-  "SAFECAFE_AUTH_IP_RATE_LIMIT_PER_MINUTE",
-  "SAFECAFE_READ_API_IP_RATE_LIMIT_PER_MINUTE",
-  "SAFECAFE_RPC_IP_RATE_LIMIT_PER_MINUTE",
-  "SAFECAFE_SAFE_TX_IP_RATE_LIMIT_PER_MINUTE",
-  "SAFECAFE_TRUST_PROXY_HEADERS",
-  "SAFECAFE_SAFE_API_KEYS",
-  "SAFECAFE_SAFE_TX_SERVICE_URL",
-  "SAFECAFE_LLM_API_BASE",
-  "SAFECAFE_LLM_API_MODEL",
-  "SAFECAFE_LLM_API_KEY",
-  "SAFECAFE_LLM_TIMEOUT_MS",
-  "SAFECAFE_LLM_MAX_TOKENS",
-  "SAFECAFE_LLM_HEADER",
-  "SAFECAFE_AGENT_DAILY_LIMIT",
-  "SAFECAFE_AGENT_FEEDBACK_DAILY_LIMIT",
-  "SAFECAFE_AGENT_FEEDBACK_GLOBAL_DAILY_LIMIT",
-  "VITE_AGENT_AUTH",
-] as const
 
 export function collectCloudflarePagesSecrets(environment: NodeJS.ProcessEnv): Array<{ name: string; value: string }> {
   return cloudflarePagesRuntimeSecretNames

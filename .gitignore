@@ -30,6 +30,9 @@ logs/
 # Testing
 coverage/
 
+# Local engineering notes
+docs/engineering/
+
 # Cache
 .cache/
 *.tsbuildinfo

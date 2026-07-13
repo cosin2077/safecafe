@@ -5,6 +5,7 @@ import { defineConfig } from "vite"
 import { handleAccountLiveRequest } from "./src/server/accountLive"
 import { handleAgentApiRequest } from "./src/server/agentApi"
 import { handleAgentFeedbackRequest } from "./src/server/agentFeedback"
+import { viteDevServerEnvNames } from "./src/server/envNames"
 import { handleRewardProofRequest } from "./src/server/rewardsProof"
 import {
   handleEthereumRpcGatewayRequest,
@@ -55,34 +56,7 @@ export default defineConfig({
           }
           res.end()
         }
-        const env = {
-          SAFECAFE_RPC_ALLOW_ALL_WALLETS: process.env.SAFECAFE_RPC_ALLOW_ALL_WALLETS,
-          SAFECAFE_AUTH_SECRET: process.env.SAFECAFE_AUTH_SECRET,
-          SAFECAFE_MOCK_ACCOUNT: process.env.SAFECAFE_MOCK_ACCOUNT,
-          SAFECAFE_MOCK_ACCOUNT_LIVE: process.env.SAFECAFE_MOCK_ACCOUNT_LIVE,
-          SAFECAFE_AGENT_FEEDBACK_DAILY_LIMIT: process.env.SAFECAFE_AGENT_FEEDBACK_DAILY_LIMIT,
-          SAFECAFE_AGENT_FEEDBACK_IP_RATE_LIMIT_PER_MINUTE:
-            process.env.SAFECAFE_AGENT_FEEDBACK_IP_RATE_LIMIT_PER_MINUTE,
-          SAFECAFE_AGENT_IP_RATE_LIMIT_PER_MINUTE: process.env.SAFECAFE_AGENT_IP_RATE_LIMIT_PER_MINUTE,
-          SAFECAFE_API_IP_RATE_LIMIT_PER_MINUTE: process.env.SAFECAFE_API_IP_RATE_LIMIT_PER_MINUTE,
-          SAFECAFE_AUTH_IP_RATE_LIMIT_PER_MINUTE: process.env.SAFECAFE_AUTH_IP_RATE_LIMIT_PER_MINUTE,
-          SAFECAFE_READ_API_IP_RATE_LIMIT_PER_MINUTE: process.env.SAFECAFE_READ_API_IP_RATE_LIMIT_PER_MINUTE,
-          SAFECAFE_RPC_URL: process.env.SAFECAFE_RPC_URL,
-          SAFECAFE_RPC_URLS: process.env.SAFECAFE_RPC_URLS,
-          SAFECAFE_RPC_IP_RATE_LIMIT_PER_MINUTE: process.env.SAFECAFE_RPC_IP_RATE_LIMIT_PER_MINUTE,
-          SAFECAFE_SAFE_API_KEYS: process.env.SAFECAFE_SAFE_API_KEYS,
-          SAFECAFE_SAFE_TX_SERVICE_URL: process.env.SAFECAFE_SAFE_TX_SERVICE_URL,
-          SAFECAFE_SAFE_TX_IP_RATE_LIMIT_PER_MINUTE: process.env.SAFECAFE_SAFE_TX_IP_RATE_LIMIT_PER_MINUTE,
-          SAFECAFE_TRUST_PROXY_HEADERS: process.env.SAFECAFE_TRUST_PROXY_HEADERS,
-          SAFECAFE_LLM_API_BASE: process.env.SAFECAFE_LLM_API_BASE,
-          SAFECAFE_LLM_API_MODEL: process.env.SAFECAFE_LLM_API_MODEL,
-          SAFECAFE_LLM_API_KEY: process.env.SAFECAFE_LLM_API_KEY,
-          SAFECAFE_LLM_TIMEOUT_MS: process.env.SAFECAFE_LLM_TIMEOUT_MS,
-          SAFECAFE_LLM_MAX_TOKENS: process.env.SAFECAFE_LLM_MAX_TOKENS,
-          SAFECAFE_LLM_HEADER: process.env.SAFECAFE_LLM_HEADER,
-          SAFECAFE_AGENT_DAILY_LIMIT: process.env.SAFECAFE_AGENT_DAILY_LIMIT,
-          VITE_AGENT_AUTH: process.env.VITE_AGENT_AUTH,
-        }
+        const env = Object.fromEntries(viteDevServerEnvNames.map((name) => [name, process.env[name]]))
         server.middlewares.use("/api/agent/feedback", async (req, res) => {
           await handleApi(req, res, "/api/agent/feedback", (request) => handleAgentFeedbackRequest(request, env))
         })

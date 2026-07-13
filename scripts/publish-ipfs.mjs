@@ -6,8 +6,8 @@ import { join, relative } from "node:path"
 import { ObjectManager } from "@filebase/sdk"
 
 const distDir = join(process.cwd(), "dist")
-const releasesPath = join(process.cwd(), "IPFS_RELEASES.md")
-const cloudflareDocPath = join(process.cwd(), "CLOUDFLARE.md")
+const releasesPath = join(process.cwd(), "docs", "IPFS_RELEASES.md")
+const cloudflareDocPath = join(process.cwd(), "docs", "CLOUDFLARE.md")
 const readmePath = join(process.cwd(), "README.md")
 const releaseRecordsDir = join(process.cwd(), "releases", "ipfs")
 const publicReleaseRecordPath = join(process.cwd(), "public", "release-record.json")
@@ -149,8 +149,8 @@ console.log("Release record:")
 console.log("dist/release-record.json")
 console.log("releases/ipfs/latest.json")
 console.log("Updated docs:")
-console.log("IPFS_RELEASES.md")
-console.log("CLOUDFLARE.md")
+console.log("docs/IPFS_RELEASES.md")
+console.log("docs/CLOUDFLARE.md")
 console.log("README.md")
 
 function loadEnv() {

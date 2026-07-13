@@ -266,7 +266,7 @@ https://safe-staking.eth.limo/
 The script also updates release records in git:
 
 - [IPFS_RELEASES.md](IPFS_RELEASES.md): append-only human-readable release table.
-- [releases/ipfs/latest.json](releases/ipfs/latest.json): machine-readable latest release record.
+- [releases/ipfs/latest.json](../releases/ipfs/latest.json): machine-readable latest release record.
 - `releases/ipfs/<CID>.json`: machine-readable immutable release snapshot.
 - `README.md` and this document: latest CID blocks.
 
@@ -345,11 +345,11 @@ Cloudflare and IPFS rollbacks are different:
 
 ## SPA Routing
 
-Safecafe uses [public/_redirects](public/_redirects) so deep links resolve to `index.html` on Cloudflare Pages.
+Safecafe uses [public/_redirects](../public/_redirects) so deep links resolve to `index.html` on Cloudflare Pages.
 
 ## Headers
 
-Safecafe ships [public/_headers](public/_headers) for Cloudflare Pages:
+Safecafe ships [public/_headers](../public/_headers) for Cloudflare Pages:
 
 - Basic browser hardening headers.
 - Immutable caching for Vite fingerprinted assets under `/assets/*`.

@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
   readonly VITE_API_BASE_URL?: string
+  readonly VITE_RPC_URL?: string
   readonly VITE_TOAST_DURATION_MS?: string
   readonly VITE_AGENT_LAUNCHER_DRAGGABLE?: string
   readonly VITE_AGENT_AUTH?: string

@@ -167,7 +167,7 @@ The CLI can preview actions, execute from an EOA, or manage a Safe directly with
 
 ## Testing
 
-See [TESTING.md](TESTING.md) for the integration and system smoke-test strategy.
+See [docs/TESTING.md](docs/TESTING.md) for the integration and system smoke-test strategy.
 
 ## Deployment
 
@@ -179,7 +179,7 @@ pnpm build:web
 
 The output in `dist/` can be deployed to Cloudflare Pages, IPFS-style static hosting, or any static host that supports SPA fallback routing. Full server-side features under `/api/*` require Cloudflare Pages Functions. Pure static hosts can still run the core staking UI with wallet/public-RPC reads; Agent, hosted Safe Transaction Service sync, and server-side read APIs are enhanced features. On ENS/IPFS frontends, configure `VITE_API_BASE_URL` or use the built-in hosted fallback at `https://safecafe.baserun.link`.
 
-Cloudflare Pages is the recommended primary public host. Filebase/IPFS is used for immutable release snapshots, and `safe-staking.eth` is configured to resolve through `https://safe-staking.eth.limo/` after its ENS contenthash points to the current `ipfs://<CID>`. See [CLOUDFLARE.md](CLOUDFLARE.md) for the full development, Cloudflare deployment, IPFS publishing, ENS update, and verification flow.
+Cloudflare Pages is the recommended primary public host. Filebase/IPFS is used for immutable release snapshots, and `safe-staking.eth` is configured to resolve through `https://safe-staking.eth.limo/` after its ENS contenthash points to the current `ipfs://<CID>`. See [docs/CLOUDFLARE.md](docs/CLOUDFLARE.md) for the full development, Cloudflare deployment, IPFS publishing, ENS update, and verification flow.
 
 Maintainers can run the interactive production release wizard with:
 
@@ -201,7 +201,7 @@ If the current version is already published, the first run prepares the next pat
 
 ## Resilience
 
-Safecafe is designed for Track A: permissionless, non-custodial access with verifiable static releases and user-configurable data/service endpoints. See [RESILIENCE.md](RESILIENCE.md) for the decentralization, uptime, signing, data-source, and release-verification model.
+Safecafe is designed for Track A: permissionless, non-custodial access with verifiable static releases and user-configurable data/service endpoints. See [docs/RESILIENCE.md](docs/RESILIENCE.md) for the decentralization, uptime, signing, data-source, and release-verification model.
 
 ## Security
 
