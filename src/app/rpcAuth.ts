@@ -27,6 +27,20 @@ type VerifyResponse = {
   token: string
 }
 
+export class RpcAuthError extends Error {
+  readonly code?: string
+  readonly resetAt?: string
+  readonly status: number
+
+  constructor(status: number, message: string, options: { code?: string; resetAt?: string } = {}) {
+    super(message)
+    this.name = "RpcAuthError"
+    this.status = status
+    this.code = options.code
+    this.resetAt = options.resetAt
+  }
+}
+
 export function readRpcSession(identity: WalletIdentity | Address | null): StoredRpcSession | null {
   const normalized = normalizeIdentity(identity)
   if (!normalized.signer || !normalized.subject) return null
@@ -94,15 +108,22 @@ export async function ensureRpcSession(
 
 async function readRpcAuthError(response: Response) {
   try {
-    const body = (await response.json()) as { code?: unknown; error?: unknown; requestId?: unknown }
+    const body = (await response.json()) as {
+      code?: unknown
+      error?: unknown
+      requestId?: unknown
+      resetAt?: unknown
+    }
     const message = typeof body.error === "string" ? body.error : `RPC authentication failed: ${response.status}`
-    const code = typeof body.code === "string" ? body.code : ""
+    const code = typeof body.code === "string" ? body.code : undefined
     const requestId = typeof body.requestId === "string" ? body.requestId : ""
-    return new Error(
+    return new RpcAuthError(
+      response.status,
       [message, code ? `(${code})` : "", requestId ? `request ${requestId}` : ""].filter(Boolean).join(" "),
+      { code, resetAt: typeof body.resetAt === "string" ? body.resetAt : undefined },
     )
   } catch {
-    return new Error(`RPC authentication failed: ${response.status}`)
+    return new RpcAuthError(response.status, `RPC authentication failed: ${response.status}`)
   }
 }
 

@@ -1585,6 +1585,9 @@ function resolveAgentApiErrorMessage(error: unknown, t: MessageBundle) {
   if (error.code === "agent_daily_limit_exceeded") {
     return t.agentDailyLimitExceeded.replace("{resetAt}", formatAgentResetTime(error.resetAt))
   }
+  if (error.code === "ip_rate_limited") {
+    return t.agentIpRateLimitExceeded.replace("{resetAt}", formatAgentResetTime(error.resetAt))
+  }
   if (error.code === "agent_access_denied") return t.agentAccessDeniedNoSafe
   if (error.code === "agent_auth_mismatch") return t.agentAuthMismatch
   if (error.code === "agent_invalid_context") return t.agentInvalidContext

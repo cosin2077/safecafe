@@ -1,5 +1,6 @@
 import { parseSafeAmount, type TxPlan } from "../protocol"
-import type { MessageBundle } from "./i18n"
+import type { Locale, MessageBundle } from "./i18n"
+import { RpcAuthError } from "./rpcAuth"
 import type { SafePriceState } from "./types"
 
 export function safeParsedAmount(value: string): bigint | null {
@@ -62,7 +63,8 @@ export function formatDelayLabel(seconds: bigint, t: MessageBundle) {
   return `${minutes} ${minutes === 1 ? t.minute : t.minutes}`
 }
 
-export function readableSimulationError(error: unknown, fallback: string) {
+export function readableSimulationError(error: unknown, fallback: string, rateLimitedMessage?: string) {
+  if (rateLimitedMessage && isIpRateLimitedError(error)) return rateLimitedMessage
   if (typeof error === "object" && error !== null && "shortMessage" in error) {
     const shortMessage = (error as { shortMessage?: unknown }).shortMessage
     if (typeof shortMessage === "string" && shortMessage.trim()) return shortMessage
@@ -74,6 +76,38 @@ export function readableSimulationError(error: unknown, fallback: string) {
   }
   if (error instanceof Error) return readableJsonRpcError(error.message) ?? error.message
   return readableJsonRpcError(error) ?? fallback
+}
+
+export function readableRpcAuthError(error: unknown, fallback: string, t: MessageBundle, locale: Locale) {
+  if (error instanceof RpcAuthError && error.code === "ip_rate_limited") {
+    return formatRateLimitMessage(t, locale, error.resetAt)
+  }
+  return error instanceof Error ? error.message : fallback
+}
+
+export function formatRateLimitMessage(t: MessageBundle, locale: Locale, resetAt?: string) {
+  if (!resetAt) return t.requestRateLimited
+  const date = new Date(resetAt)
+  if (Number.isNaN(date.getTime())) return t.requestRateLimited
+  return t.requestRateLimitedWithReset.replace(
+    "{resetAt}",
+    new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(date),
+  )
+}
+
+function isIpRateLimitedError(error: unknown) {
+  const values: unknown[] = [error]
+  if (typeof error === "object" && error !== null) {
+    values.push((error as { details?: unknown }).details, (error as { message?: unknown }).message)
+  }
+  return values.some((value) => {
+    if (typeof value === "string") return value.includes("ip_rate_limited")
+    try {
+      return JSON.stringify(value).includes("ip_rate_limited")
+    } catch {
+      return false
+    }
+  })
 }
 
 function readableJsonRpcError(value: unknown) {

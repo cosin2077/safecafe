@@ -1,7 +1,6 @@
 import {
   ArrowDownToLine,
   ChevronDown,
-  Database,
   Gift,
   Home,
   Languages,
@@ -12,6 +11,7 @@ import {
   TrendingUp,
   Users,
   Wallet,
+  WalletCards,
   X,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -54,7 +54,14 @@ import { apiUrl, resolveApiBaseUrl } from "../shared/apiUrl"
 import { SAFECAFE_VERSION } from "../shared/version"
 import { AgentLauncher } from "./AgentLauncher"
 import { DetailModal } from "./DetailModal"
-import { readableSimulationError, safeParsedAmount, stringifyBigInts, translateTxLabel } from "./formatters"
+import {
+  formatRateLimitMessage,
+  readableRpcAuthError,
+  readableSimulationError,
+  safeParsedAmount,
+  stringifyBigInts,
+  translateTxLabel,
+} from "./formatters"
 import { detectLocale, getMessages, isLocale, type Locale, localeOptions, type MessageBundle } from "./i18n"
 import {
   accountLiveCacheFreshMs,
@@ -105,7 +112,7 @@ import {
   navItems,
   type SafePriceState,
 } from "./types"
-import { ConfirmDialog, ExternalActionButton, FullPanel, Metric } from "./ui"
+import { ConfirmDialog, ExternalActionButton, FullPanel } from "./ui"
 import { isUserSafeApiKeyRejected, resolveUserSafeApiSave, type UserSafeApiStatus } from "./userSafeApiKey"
 import { compareBigintDesc, findPreferredRestakeValidator } from "./validatorSelection"
 import { DashboardView, DocsView, RewardsView, ValidatorTable, ValidatorToolbar, WithdrawalsView } from "./views"
@@ -612,10 +619,23 @@ export function App() {
   const estimatedAnnualRewards = hasLiveAccountData
     ? calculateEstimatedAnnualRewards(summary.totalStaked, estimatedApyPercent)
     : null
+  const totalPosition = displaySummary.safeBalance + displaySummary.totalStaked
+  const formattedTotalPosition = hasLiveAccountData ? formatSafe(totalPosition) : "--"
+  const formattedTotalPositionUsd = hasLiveAccountData
+    ? formatUsdFromSafe(totalPosition, displaySafePriceUsd)
+    : t.notConnected
+  const formattedStakedPosition = hasLiveAccountData ? `${formatSafe(displaySummary.totalStaked)} SAFE` : "-- SAFE"
+  const formattedAvailablePosition = hasLiveAccountData ? `${formatSafe(displaySummary.safeBalance)} SAFE` : "-- SAFE"
+  const formattedClaimableRewards = hasLiveAccountData
+    ? `${formatSafe(displaySummary.claimableRewards)} SAFE`
+    : "-- SAFE"
+  const formattedClaimableRewardsUsd = hasLiveAccountData
+    ? formatUsdFromSafe(displaySummary.claimableRewards, displaySafePriceUsd)
+    : t.notConnected
+  const formattedAnnualRewards =
+    estimatedAnnualRewards === null ? "-- SAFE" : `${formatSafe(estimatedAnnualRewards)} SAFE`
   const decisionMetrics = {
     activeValidatorCount,
-    apyPercent: estimatedApyPercent,
-    estimatedAnnualRewards,
     protocolTvlUsd: formatUsdFromSafe(validatorPoolTotal, displaySafePriceUsd),
     validatorPoolTotal,
     withdrawDelay: summary.withdrawDelay || liveSnapshot?.withdrawDelay || protocolWithdrawDelay,
@@ -923,7 +943,12 @@ export function App() {
         return nextLiveData
       } catch (error) {
         if (liveReadRequestId.current !== requestId) return null
-        const message = error instanceof Error ? error.message : t.liveDataFailed
+        const message =
+          error instanceof ApiResponseError && error.code === "ip_rate_limited"
+            ? formatRateLimitMessage(t, locale, error.resetAt)
+            : error instanceof Error
+              ? error.message
+              : t.liveDataFailed
         const fallbackMessage = cached ? `${t.liveDataRefreshFailedCached} ${message}` : message
         setLiveError(fallbackMessage)
         toast(fallbackMessage, "warning")
@@ -932,16 +957,7 @@ export function App() {
         if (liveReadRequestId.current === requestId) setIsReadingLive(false)
       }
     },
-    [
-      applyLiveReadResult,
-      customRpcEnabled,
-      effectiveRpcUrl,
-      subjectAccount,
-      t.connectToLoad,
-      t.liveDataFailed,
-      t.liveDataRefreshFailedCached,
-      toast,
-    ],
+    [applyLiveReadResult, customRpcEnabled, effectiveRpcUrl, subjectAccount, locale, t, toast],
   )
 
   useEffect(() => {
@@ -1261,7 +1277,8 @@ export function App() {
       setRpcAuthToken(session?.token ?? null)
       return session?.token ?? null
     } catch (error) {
-      toast(error instanceof Error ? error.message : t.agentAuthFailed, "warning")
+      const message = readableRpcAuthError(error, t.agentAuthFailed, t, locale)
+      toast(message, "warning")
       return null
     }
   }
@@ -1533,7 +1550,7 @@ export function App() {
         skipValidation: true,
       })
     } catch (error) {
-      toast(readableSimulationError(error, t.transactionFailed), "warning")
+      toast(readableSimulationError(error, t.transactionFailed, t.requestRateLimited), "warning")
     } finally {
       setIsSubmitting(false)
       setSubmittingAction(null)
@@ -1583,7 +1600,7 @@ export function App() {
         skipValidation: true,
       })
     } catch (error) {
-      toast(readableSimulationError(error, t.transactionFailed), "warning")
+      toast(readableSimulationError(error, t.transactionFailed, t.requestRateLimited), "warning")
     } finally {
       setIsSubmitting(false)
       setSubmittingAction(null)
@@ -1603,7 +1620,7 @@ export function App() {
         simulation: {
           status: "failed",
           simulatedTxs: 0,
-          message: error instanceof Error ? error.message : t.agentAuthFailed,
+          message: readableRpcAuthError(error, t.agentAuthFailed, t, locale),
         },
       }
     }
@@ -1623,7 +1640,9 @@ export function App() {
             value: tx.value,
           })
         } catch (error) {
-          throw new Error(`${translateTxLabel(tx.label, t)}: ${readableSimulationError(error, t.simulationFailed)}`)
+          throw new Error(
+            `${translateTxLabel(tx.label, t)}: ${readableSimulationError(error, t.simulationFailed, t.requestRateLimited)}`,
+          )
         }
       }
       return {
@@ -1640,7 +1659,7 @@ export function App() {
         simulation: {
           status: "failed",
           simulatedTxs: 0,
-          message: readableSimulationError(error, t.simulationFailed),
+          message: readableSimulationError(error, t.simulationFailed, t.requestRateLimited),
         },
       }
     }
@@ -1769,7 +1788,7 @@ export function App() {
               value: tx.value,
             })
           } catch (error) {
-            throw new Error(`${label}: ${readableSimulationError(error, t.simulationFailed)}`)
+            throw new Error(`${label}: ${readableSimulationError(error, t.simulationFailed, t.requestRateLimited)}`)
           }
           setTxProgress(`${t.walletConfirmation}: ${label}`)
           const hash = await client.sendTransaction({
@@ -1816,7 +1835,12 @@ export function App() {
       }
     } catch (error) {
       const rejected = isUserRejectedRequest(error)
-      const message = readableSimulationError(error, t.transactionFailed)
+      const message = readableRpcAuthError(
+        error,
+        readableSimulationError(error, t.transactionFailed, t.requestRateLimited),
+        t,
+        locale,
+      )
       setTxExecution((current) => {
         if (!current) return current
         const nextSteps = [...current.steps]
@@ -1838,7 +1862,7 @@ export function App() {
           userRejected: rejected,
         }
       })
-      toast(readableSimulationError(error, t.transactionFailed), "warning")
+      toast(message, "warning")
     } finally {
       if (!options.alreadySubmitting) setIsSubmitting(false)
       if (!options.alreadySubmitting) setSubmittingAction(null)
@@ -1972,7 +1996,7 @@ export function App() {
           value: safeTx.value,
         })
       } catch (error) {
-        throw new Error(`${label}: ${readableSimulationError(error, t.simulationFailed)}`)
+        throw new Error(`${label}: ${readableSimulationError(error, t.simulationFailed, t.requestRateLimited)}`)
       }
       setTxProgress(`${t.safeExecDirect}: ${label}`)
       const hash = await params.client.sendTransaction({
@@ -2384,37 +2408,53 @@ export function App() {
               </div>
             )}
             <div className="summary-grid">
-              <Metric
-                icon={<Database />}
-                label={t.safeBalance}
-                value={hasLiveAccountData ? displaySummary.safeBalance : null}
-                unavailable={t.notConnected}
-                safePriceUsd={displaySafePriceUsd}
-              />
-              <Metric
-                icon={<Wallet />}
-                label={t.totalStaked}
-                value={hasLiveAccountData ? displaySummary.totalStaked : null}
-                unavailable={t.notConnected}
-                safePriceUsd={displaySafePriceUsd}
-              />
-              <Metric
-                icon={<Gift />}
-                label={t.claimableRewards}
-                value={hasLiveAccountData ? displaySummary.claimableRewards : null}
-                unavailable={t.notConnected}
-                safePriceUsd={displaySafePriceUsd}
-              />
-              <div className="metric metric-rate">
-                <span className="metric-icon">
+              <article className="summary-position-card">
+                <WalletCards className="summary-position-watermark" size={118} aria-hidden="true" />
+                <span>{t.yourPosition}</span>
+                <strong>{formattedTotalPosition} SAFE</strong>
+                <em>{formattedTotalPositionUsd}</em>
+                <div className="summary-position-split">
+                  <div>
+                    <small>
+                      <i className="summary-dot summary-dot-staked" />
+                      {t.staked}
+                    </small>
+                    <b>{formattedStakedPosition}</b>
+                  </div>
+                  <div>
+                    <small>
+                      <i className="summary-dot" />
+                      {t.available}
+                    </small>
+                    <b>{formattedAvailablePosition}</b>
+                  </div>
+                </div>
+              </article>
+              <article className="summary-balance-card summary-claim-card">
+                <span className="summary-card-icon">
+                  <Gift />
+                </span>
+                <div>
+                  <small>{t.claimableRewards}</small>
+                  <strong>{formattedClaimableRewards}</strong>
+                  <em>{formattedClaimableRewardsUsd}</em>
+                </div>
+              </article>
+              <article className="summary-balance-card summary-earnings-card">
+                <span className="summary-card-icon">
                   <TrendingUp />
                 </span>
-                <span>
-                  <small>{t.currentApy}</small>
-                  <strong>{formatPercentOrDash(estimatedApyPercent)}</strong>
-                  <em>{t.estimatedAnnualRewards}</em>
-                </span>
-              </div>
+                <div>
+                  <small>{t.estimatedEarnings}</small>
+                  <strong>
+                    {formatPercentOrDash(estimatedApyPercent)} <b>APY</b>
+                  </strong>
+                  <em>
+                    {formattedAnnualRewards} {t.perYear}
+                  </em>
+                  <span>{t.estimatedAnnualRewards}</span>
+                </div>
+              </article>
             </div>
           </section>
         )}
@@ -2665,12 +2705,16 @@ export function App() {
 const liveReadCache = new Map<string, Promise<LiveReadResult>>()
 
 class ApiResponseError extends Error {
+  readonly code?: string
+  readonly resetAt?: string
   readonly status: number
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, options: { code?: string; resetAt?: string } = {}) {
     super(message)
     this.name = "ApiResponseError"
     this.status = status
+    this.code = options.code
+    this.resetAt = options.resetAt
   }
 }
 
@@ -2690,7 +2734,10 @@ async function readLiveData(
     const response = await fetch(apiUrl(`/api/account/live?${params.toString()}`, import.meta.env.VITE_API_BASE_URL), {
       cache: "no-store",
     })
-    if (!response.ok) throw new ApiResponseError(response.status, await readLiveDataError(response))
+    if (!response.ok) {
+      const error = await readLiveDataError(response)
+      throw new ApiResponseError(response.status, error.message, error)
+    }
     return parseLiveReadResult(await response.json())
   })()
 
@@ -2708,7 +2755,7 @@ async function readLiveData(
 
 function shouldFallbackToDirectLiveRead(error: unknown) {
   if (error instanceof ApiResponseError) {
-    return error.status === 404 || error.status === 405
+    return error.status === 404 || error.status === 405 || error.status >= 500
   }
   return error instanceof TypeError || error instanceof SyntaxError
 }
@@ -2743,13 +2790,22 @@ function calculateClaimableRewards(proof: RewardProof | null, cumulativeClaimed:
 
 async function readLiveDataError(response: Response) {
   try {
-    const body = (await response.json()) as { code?: unknown; error?: unknown; requestId?: unknown }
+    const body = (await response.json()) as {
+      code?: unknown
+      error?: unknown
+      requestId?: unknown
+      resetAt?: unknown
+    }
     const message = typeof body.error === "string" ? body.error : `Account live API failed: ${response.status}`
-    const code = typeof body.code === "string" ? body.code : ""
+    const code = typeof body.code === "string" ? body.code : undefined
     const requestId = typeof body.requestId === "string" ? body.requestId : response.headers.get("x-request-id")
-    return [message, code ? `(${code})` : "", requestId ? `request ${requestId}` : ""].filter(Boolean).join(" ")
+    return {
+      code,
+      message: [message, code ? `(${code})` : "", requestId ? `request ${requestId}` : ""].filter(Boolean).join(" "),
+      resetAt: typeof body.resetAt === "string" ? body.resetAt : undefined,
+    }
   } catch {
-    return `Account live API failed: ${response.status}`
+    return { message: `Account live API failed: ${response.status}` }
   }
 }
 

@@ -58,8 +58,6 @@ type UserLlmDraft = {
 type ExecuteActionOptions = { amount?: string; validator?: Address }
 type DecisionMetrics = {
   activeValidatorCount: number
-  apyPercent: number | null
-  estimatedAnnualRewards: bigint | null
   protocolTvlUsd: string
   validatorPoolTotal: bigint
   withdrawDelay: bigint
@@ -137,7 +135,7 @@ export function DashboardView(props: {
   }))
   return (
     <div className="content-grid enter">
-      <DecisionMetricsStrip t={t} metrics={props.decisionMetrics} accountReady={props.accountReady} />
+      <DecisionMetricsStrip t={t} metrics={props.decisionMetrics} />
       <div className="main-stack">
         <section className="panel primary-actions-panel">
           <div className="action-grid">
@@ -323,24 +321,9 @@ export function DashboardView(props: {
   )
 }
 
-function DecisionMetricsStrip({
-  accountReady,
-  metrics,
-  t,
-}: {
-  accountReady: boolean
-  metrics: DecisionMetrics
-  t: MessageBundle
-}) {
+function DecisionMetricsStrip({ metrics, t }: { metrics: DecisionMetrics; t: MessageBundle }) {
   return (
     <section className="decision-strip" aria-label={t.publicProtocolData}>
-      <div className="decision-primary decision-rewards">
-        <span className="decision-icon">
-          <Database size={28} />
-        </span>
-        <span>{t.estimatedAnnualRewards}</span>
-        <strong>{accountReady ? formatOptionalSafeAmount(metrics.estimatedAnnualRewards) : "-- SAFE"}</strong>
-      </div>
       <div className="decision-tvl">
         <span className="decision-icon">
           <TrendingUp size={28} />
@@ -355,6 +338,7 @@ function DecisionMetricsStrip({
         </span>
         <span>{t.unstakeDelay}</span>
         <strong>{formatDelayLabel(metrics.withdrawDelay, t)}</strong>
+        <small>{formatApproxEpochPeriods(metrics.withdrawDelay, t)}</small>
       </div>
       <div className="decision-count">
         <span className="decision-icon">
@@ -362,13 +346,15 @@ function DecisionMetricsStrip({
         </span>
         <span>{t.activeValidatorsMetric}</span>
         <strong>{metrics.activeValidatorCount}</strong>
+        <small>{t.validators}</small>
       </div>
     </section>
   )
 }
 
-function formatOptionalSafeAmount(value: bigint | null) {
-  return value === null ? "- SAFE" : `${formatSafe(value)} SAFE`
+function formatApproxEpochPeriods(seconds: bigint, t: MessageBundle) {
+  const periods = Math.max(1, Math.round(Number(seconds) / 86400))
+  return `~${periods} ${periods === 1 ? t.epochPeriod : t.epochPeriods}`
 }
 
 function TransactionPreview({ preview, t, title }: { preview: ActionPreview; t: MessageBundle; title?: string }) {

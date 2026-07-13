@@ -58,20 +58,18 @@ The wizard never handles an ENS private key, sends an ENS transaction, commits G
 Supported options:
 
 ```bash
-pnpm release --resume
 pnpm release --yes
 pnpm release --quick
 pnpm release --bump=minor
 pnpm release --poll-interval=30
 ```
 
-- `--resume` continues the session stored in `dist/release-session.json`. It validates that the saved commit still matches `HEAD` and skips completed upload/deploy stages.
 - `--yes` skips only the initial release confirmation. Manual ENS confirmation is always required.
 - `--quick` runs `pnpm check` instead of the full Agent, integration, and system release checks.
 - `--bump=patch|minor|major` selects the version prepared when the current version is already published. The default is `patch`.
 - `--poll-interval=<seconds>` changes the ENS and endpoint verification interval. Default: `15`; minimum: `5`.
 
-Version preparation never commits or tags automatically. Review the synchronized version files, commit them, then run the wizard again. Press `Ctrl+C` while waiting for ENS to stop safely, then run `pnpm release --resume` later. The generated release records and documentation updates must still be reviewed and committed manually.
+Version preparation never commits or tags automatically. Review the synchronized version files, commit them, then run the wizard again. The release itself is a single linear process; if it is interrupted, run `pnpm release` again from a clean worktree. The generated release records and documentation updates must still be reviewed and committed manually.
 
 The equivalent low-level order is:
 
@@ -126,7 +124,7 @@ Configure these environment variables before enabling live account reads, authen
 
 The built-in limiter is a bounded fixed-window memory implementation. Each process or Cloudflare isolate retains at most 10,000 active route/client buckets; counters reset with the isolate and are not globally consistent. Use Cloudflare Rate Limiting Rules when strict edge-wide enforcement or stronger cost guarantees are required.
 
-`SAFECAFE_LLM_API_KEY` must not be exposed as a `VITE_*` variable. The web app calls the Cloudflare Pages Function at `/api/agent`; the function reads the server-side `SAFECAFE_LLM_*` variables and returns only the Agent response. During `pnpm release`, `.env` is the source of truth for Safecafe, Vite, and Filebase release configuration when it exists; shell values for missing release keys are ignored. Without `.env`, the wizard uses the current shell environment. `VITE_*` values are consumed while building the browser bundle, while non-empty server runtime variables such as `SAFECAFE_LLM_*` and `SAFECAFE_SAFE_API_KEYS` are synchronized to Cloudflare Pages secrets. Empty values are intentionally not treated as deletion requests; remove stale Cloudflare secrets manually from the dashboard or Wrangler when needed.
+`SAFECAFE_LLM_API_KEY` must not be exposed as a `VITE_*` variable. The web app calls the Cloudflare Pages Function at `/api/agent`; the function reads the server-side `SAFECAFE_LLM_*` variables and returns only the Agent response. During `pnpm release`, `.env` is the source of truth for Safecafe, Vite, Filebase, and the known Cloudflare Pages runtime secrets when it exists; shell values for missing release keys are ignored, non-empty values are uploaded, and known secrets that are empty or missing are deleted. Without `.env`, the wizard uses the current shell environment and does not delete unspecified Cloudflare secrets. `VITE_*` values are consumed while building the browser bundle.
 
 The Agent daily quota is intentionally lightweight and in-memory. It is enough for basic abuse control, but counters can reset when Cloudflare starts a new isolate.
 

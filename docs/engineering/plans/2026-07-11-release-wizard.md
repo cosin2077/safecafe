@@ -25,28 +25,27 @@
 - Create: `scripts/release/core-test.ts`
 
 **Interfaces:**
-- Produces: `parseReleaseArgs(argv)`, `validateReleaseSession(session, head)`, `decodeIpfsContenthash(value)`, `redactReleaseError(value)`, and shared release types.
+- Produces: `parseReleaseArgs(argv)`, `decodeIpfsContenthash(value)`, `redactReleaseError(value)`, secret synchronization helpers, and shared release types.
 
-- [x] Write tests covering default arguments, `--resume`, `--yes`, `--quick`, poll interval bounds, matching/mismatching session commits, IPFS contenthash decoding, malformed contenthash, and token/secret redaction.
+- [x] Write tests covering default arguments, `--yes`, `--quick`, poll interval bounds, IPFS contenthash decoding, malformed contenthash, secret synchronization, and token/secret redaction.
 - [x] Run `pnpm exec tsx scripts/release/core-test.ts` and verify the tests fail because the helper module does not exist.
 - [x] Implement the minimal typed helpers without `any` and without network access.
 - [x] Re-run the helper tests and verify they pass.
 
-### Task 2: Interactive orchestration and resume state
+### Task 2: Interactive orchestration
 
 **Files:**
 - Create: `scripts/release.ts`
 - Create: `scripts/release-test.ts`
-- Modify: `.gitignore`
 
 **Interfaces:**
 - Consumes: Task 1 helpers.
-- Produces: executable release workflow, `dist/release-session.json`, injectable command/fetch/prompt dependencies for tests.
+- Produces: executable single-run release workflow and injectable command/fetch/prompt dependencies for tests.
 
 - [x] Write a fake-dependency workflow test proving the exact order: preflight, checks, build, IPFS publish, gateway verification, Cloudflare deploy, manual ENS pause, ENS polling, final verification.
-- [x] Add tests proving a failure before IPFS does not create a session, a failure after IPFS preserves it, `--resume` skips completed stages but retries an unfinished Cloudflare deploy, and secrets are absent from rendered errors.
+- [x] Add tests proving the exact linear workflow, transient ENS/final verification retries, and secret-safe rendered errors.
 - [x] Run `pnpm exec tsx scripts/release-test.ts` and verify it fails before implementation.
-- [x] Implement structured ANSI logging, command execution, confirmation prompts, session persistence, signal-safe shutdown and recovery messages.
+- [x] Implement structured ANSI logging, command execution, confirmation prompts, signal-safe shutdown and restart guidance.
 - [x] Implement direct ENS resolver/contenthash reads with viem and retry transient RPC failures until CID match or `Ctrl+C`.
 - [x] Re-run both release test files and verify they pass.
 
@@ -60,7 +59,7 @@
 - Produces: `pnpm release`, `pnpm test:release`, documented production and recovery flows.
 
 - [x] Add `release: "tsx scripts/release.ts"` and a focused `test:release` command running both release test files.
-- [x] Document the wizard as the recommended production path, all supported flags, the manual ENS pause, `--resume`, and the existing low-level recovery commands.
+- [x] Document the wizard as the recommended production path, all supported flags, the manual ENS pause, strict `.env` secret synchronization, and the existing low-level commands.
 - [x] Run `pnpm test:release` and verify all focused tests pass.
 
 ### Task 4: Targeted verification

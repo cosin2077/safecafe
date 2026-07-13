@@ -1,7 +1,6 @@
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, Clock3, Copy, ExternalLink } from "lucide-react"
 import { type KeyboardEvent, type MouseEvent, type ReactNode, useEffect, useId, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import { formatSafe, formatUsdFromSafe } from "../protocol"
 import { translateTxLabel } from "./formatters"
 import type { MessageBundle } from "./i18n"
 import type { PlanExecutionSummary } from "./planExecution"
@@ -33,31 +32,6 @@ export function InfoCard({ icon, title, value }: { icon: ReactNode; title: strin
       <span>{icon}</span>
       <small>{title}</small>
       <strong>{value}</strong>
-    </div>
-  )
-}
-
-export function Metric({
-  icon,
-  label,
-  value,
-  unavailable,
-  safePriceUsd,
-}: {
-  icon: ReactNode
-  label: string
-  value: bigint | null
-  unavailable: string
-  safePriceUsd: number | null
-}) {
-  return (
-    <div className="metric">
-      <span className="metric-icon">{icon}</span>
-      <span>
-        <small>{label}</small>
-        <strong>{value === null ? "--" : formatSafe(value)}</strong>
-        <em>{value === null ? unavailable : formatUsdFromSafe(value, safePriceUsd)}</em>
-      </span>
     </div>
   )
 }

@@ -4,7 +4,6 @@ export type ReleaseArgs = {
   bump: ReleaseVersionBump
   pollIntervalMs: number
   quick: boolean
-  resume: boolean
   yes: boolean
 }
 
@@ -26,8 +25,6 @@ export type ReleaseSession = {
   createdAt: string
   updatedAt: string
 }
-
-const releaseStages = new Set<ReleaseStage>(["awaiting_ens", "cloudflare_deployed", "ipfs_published", "verified"])
 
 export type ReleaseOutputRedactor = {
   flush: () => void
@@ -68,18 +65,37 @@ export function collectCloudflarePagesSecrets(environment: NodeJS.ProcessEnv): A
     .filter((entry) => entry.value.length > 0)
 }
 
+export function extractCloudflarePagesSecretNames(output: string) {
+  const knownNames = new Set<string>(cloudflarePagesRuntimeSecretNames)
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s*-\s+([A-Z0-9_]+):/)?.[1] ?? "")
+    .filter((name) => knownNames.has(name))
+}
+
+export function planCloudflarePagesSecretSync(
+  environment: NodeJS.ProcessEnv,
+  existingSecretNames: readonly string[],
+  strict: boolean,
+) {
+  const put = collectCloudflarePagesSecrets(environment)
+  if (!strict) return { delete: [] as string[], put }
+  const desiredNames = new Set(put.map((entry) => entry.name))
+  const knownNames = new Set<string>(cloudflarePagesRuntimeSecretNames)
+  const deleteNames = existingSecretNames.filter((name) => knownNames.has(name) && !desiredNames.has(name)).sort()
+  return { delete: deleteNames, put }
+}
+
 export function parseReleaseArgs(argv: string[]): ReleaseArgs {
   const result: ReleaseArgs = {
     bump: "patch",
     pollIntervalMs: 15_000,
     quick: false,
-    resume: false,
     yes: false,
   }
 
   for (const argument of argv) {
     if (argument === "--quick") result.quick = true
-    else if (argument === "--resume") result.resume = true
     else if (argument === "--yes") result.yes = true
     else if (argument.startsWith("--bump=")) {
       const bump = argument.slice("--bump=".length)
@@ -137,28 +153,6 @@ export function planReleaseVersion(
 export function renderSafecafeVersionModule(version: string): string {
   parseSemanticVersion(version)
   return `export const SAFECAFE_VERSION = "${version}"\n`
-}
-
-export function validateReleaseSession(input: unknown, head: string): ReleaseSession {
-  if (!input || typeof input !== "object") throw new Error("Invalid release session.")
-  const session = input as Partial<ReleaseSession> & { version?: number }
-  if (session.version !== 1) throw new Error(`Unsupported release session version: ${String(session.version)}.`)
-  if (
-    typeof session.commit !== "string" ||
-    typeof session.cid !== "string" ||
-    typeof session.uri !== "string" ||
-    (session.cloudflareDeploymentUrl !== null && typeof session.cloudflareDeploymentUrl !== "string") ||
-    typeof session.stage !== "string" ||
-    !releaseStages.has(session.stage as ReleaseStage) ||
-    typeof session.createdAt !== "string" ||
-    typeof session.updatedAt !== "string"
-  ) {
-    throw new Error("Invalid release session.")
-  }
-  if (session.commit !== head) {
-    throw new Error(`Release session belongs to commit ${session.commit}, but current HEAD is ${head}.`)
-  }
-  return session as ReleaseSession
 }
 
 export function decodeIpfsContenthash(value: string): string | null {

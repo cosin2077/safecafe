@@ -8,7 +8,7 @@ import {
   buildAgentSystemPrompt,
 } from "../agent/upstreamProtocol"
 import { resolveAgentAuthRequired } from "../shared/agentAuth"
-import { verifyRpcAccess } from "./accessStrategy"
+import { verifySafeStakingSubjectAccess } from "./accessStrategy"
 import { type AgentFeedbackEnv, collectAgentFeedback } from "./agentFeedback"
 import { readRpcSession } from "./authSession"
 import { consumeIpRateLimit } from "./ipRateLimit"
@@ -296,7 +296,7 @@ async function verifyAgentAccess(
         "agent_auth_mismatch",
       )
     }
-    return (await verifyRpcAccess({ signer, subject }, env))
+    return (await verifySafeStakingSubjectAccess({ signer, subject }, env))
       ? { status: "eligible", address: signer, reason: "Server-side Agent access strategy check passed." }
       : lockedAgentAccess(
           "Requested wallet does not satisfy the configured Agent access strategy.",

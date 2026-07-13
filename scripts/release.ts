@@ -8,24 +8,22 @@ import { mainnet } from "viem/chains"
 import { namehash, normalize } from "viem/ens"
 import { DEFAULT_RPC_URLS } from "../src/protocol/contracts"
 import {
-  cloudflarePagesRuntimeSecretNames,
-  collectCloudflarePagesSecrets,
   createReleaseOutputRedactor,
   decodeIpfsContenthash,
+  extractCloudflarePagesSecretNames,
   parseReleaseArgs,
+  planCloudflarePagesSecretSync,
   planReleaseVersion,
   type ReleaseArgs,
   type ReleaseSession,
   type ReleaseVersionBump,
   redactReleaseError,
   renderSafecafeVersionModule,
-  validateReleaseSession,
 } from "./release/core"
 
 const projectName = "safecafe"
 const ensName = "safe-staking.eth"
 const ensManagerUrl = `https://app.ens.domains/${ensName}`
-const sessionPath = resolve("dist/release-session.json")
 const releaseRecordPath = resolve("dist/release-record.json")
 const packageJsonPath = resolve("package.json")
 const safeLitePackageJsonPath = resolve("packages/safe-lite/package.json")
@@ -67,9 +65,8 @@ export type ReleaseWorkflowDependencies = {
   build: () => Promise<void>
   confirmRelease: () => Promise<boolean>
   deployCloudflare: () => Promise<string>
-  ensurePreflight: (resume: boolean) => Promise<void>
+  ensurePreflight: () => Promise<void>
   getHead: () => Promise<string>
-  loadSession: () => Promise<ReleaseSession | null>
   log: (event: ReleaseWorkflowEvent, details?: Record<string, string>) => void
   now: () => string
   prepareVersion: (bump: ReleaseVersionBump) => Promise<string | null>
@@ -77,72 +74,100 @@ export type ReleaseWorkflowDependencies = {
   publishIpfs: () => Promise<IpfsReleaseRecord>
   readEnsCid: () => Promise<string | null>
   runChecks: (quick: boolean) => Promise<void>
-  saveSession: (session: ReleaseSession) => Promise<void>
   sleep: (milliseconds: number) => Promise<void>
   verifyFinalRelease: (session: ReleaseSession) => Promise<void>
   verifyIpfsRelease: (session: ReleaseSession) => Promise<void>
+}
+
+type ReleaseCommandOptions = {
+  input?: string
+  quiet?: boolean
+  secrets?: string[]
+}
+
+export type CloudflarePagesSecretSyncOptions = {
+  environment: NodeJS.ProcessEnv
+  logSuccess: (message: string) => void
+  logWarning: (message: string) => void
+  projectName: string
+  releaseEnvFileFound: boolean
+  runCommand: (command: string, args: string[], options?: ReleaseCommandOptions) => Promise<string>
+  secrets: string[]
+}
+
+export async function syncCloudflarePagesRuntimeSecrets(options: CloudflarePagesSecretSyncOptions) {
+  let existingSecretNames: string[] = []
+  if (options.releaseEnvFileFound) {
+    const listOutput = await options.runCommand(
+      "pnpm",
+      ["exec", "wrangler", "pages", "secret", "list", "--project-name", options.projectName],
+      { quiet: true, secrets: options.secrets },
+    )
+    existingSecretNames = extractCloudflarePagesSecretNames(listOutput)
+  }
+  const secretPlan = planCloudflarePagesSecretSync(
+    options.environment,
+    existingSecretNames,
+    options.releaseEnvFileFound,
+  )
+  for (const { name, value } of secretPlan.put) {
+    await options.runCommand(
+      "pnpm",
+      ["exec", "wrangler", "pages", "secret", "put", name, "--project-name", options.projectName],
+      { input: `${value}\n`, secrets: options.secrets },
+    )
+    options.logSuccess(`已同步 ${name}`)
+  }
+  for (const name of secretPlan.delete) {
+    await options.runCommand(
+      "pnpm",
+      ["exec", "wrangler", "pages", "secret", "delete", name, "--project-name", options.projectName],
+      { input: "y\n", secrets: options.secrets },
+    )
+    options.logSuccess(`已删除 ${name}`)
+  }
+  if (secretPlan.put.length === 0 && secretPlan.delete.length === 0) {
+    options.logWarning("Cloudflare runtime 配置无需更新")
+  }
 }
 
 export async function runReleaseWorkflow(
   args: ReleaseArgs,
   dependencies: ReleaseWorkflowDependencies,
 ): Promise<ReleaseSession | null> {
-  if (!args.resume) {
-    const preparedVersion = await dependencies.prepareVersion(args.bump)
-    if (preparedVersion) {
-      dependencies.log("version_prepared", { version: preparedVersion })
-      return null
-    }
+  const preparedVersion = await dependencies.prepareVersion(args.bump)
+  if (preparedVersion) {
+    dependencies.log("version_prepared", { version: preparedVersion })
+    return null
   }
 
   const head = await dependencies.getHead()
-  await dependencies.ensurePreflight(args.resume)
-
-  let session: ReleaseSession
-  if (args.resume) {
-    const savedSession = await dependencies.loadSession()
-    if (!savedSession) throw new Error("No resumable release session was found.")
-    session = validateReleaseSession(savedSession, head)
-  } else {
-    if (!args.yes && !(await dependencies.confirmRelease())) throw new Error("Release cancelled by user.")
-    await dependencies.runChecks(args.quick)
-    await dependencies.build()
-    const record = await dependencies.publishIpfs()
-    validatePublishedRecord(record, head)
-    const timestamp = dependencies.now()
-    session = {
-      version: 1,
-      commit: record.commit,
-      cid: record.ipfs.cid,
-      uri: record.ipfs.uri,
-      cloudflareDeploymentUrl: null,
-      stage: "ipfs_published",
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    }
-    await dependencies.saveSession(session)
+  await dependencies.ensurePreflight()
+  if (!args.yes && !(await dependencies.confirmRelease())) throw new Error("Release cancelled by user.")
+  await dependencies.runChecks(args.quick)
+  await dependencies.build()
+  const record = await dependencies.publishIpfs()
+  validatePublishedRecord(record, head)
+  const timestamp = dependencies.now()
+  let session: ReleaseSession = {
+    version: 1,
+    commit: record.commit,
+    cid: record.ipfs.cid,
+    uri: record.ipfs.uri,
+    cloudflareDeploymentUrl: null,
+    stage: "ipfs_published",
+    createdAt: timestamp,
+    updatedAt: timestamp,
   }
 
-  if (session.stage === "verified") {
-    dependencies.log("release_complete")
-    return session
-  }
-
-  if (session.stage === "ipfs_published") {
-    await dependencies.verifyIpfsRelease(session)
-    const deploymentUrl = await dependencies.deployCloudflare()
-    session = updateSession(session, dependencies.now(), {
-      cloudflareDeploymentUrl: deploymentUrl,
-      stage: "cloudflare_deployed",
-    })
-    await dependencies.saveSession(session)
-  }
-
-  if (session.stage === "cloudflare_deployed" || session.stage === "awaiting_ens") {
-    await dependencies.promptForEnsUpdate(session)
-    session = updateSession(session, dependencies.now(), { stage: "awaiting_ens" })
-    await dependencies.saveSession(session)
-  }
+  await dependencies.verifyIpfsRelease(session)
+  const deploymentUrl = await dependencies.deployCloudflare()
+  session = updateSession(session, dependencies.now(), {
+    cloudflareDeploymentUrl: deploymentUrl,
+    stage: "cloudflare_deployed",
+  })
+  await dependencies.promptForEnsUpdate(session)
+  session = updateSession(session, dependencies.now(), { stage: "awaiting_ens" })
 
   while (true) {
     try {
@@ -172,7 +197,6 @@ export async function runReleaseWorkflow(
     }
   }
   session = updateSession(session, dependencies.now(), { stage: "verified" })
-  await dependencies.saveSession(session)
   dependencies.log("release_complete")
   return session
 }
@@ -283,7 +307,7 @@ async function main() {
     let currentHead = ""
 
     process.once("SIGINT", () => {
-      logger.warning("发布已取消。已完成的发布会话会保留，可使用 pnpm release --resume 继续。")
+      logger.warning("发布已取消。重新运行 pnpm release 可从头开始新的发布流程。")
       releasePrompt.close()
       process.exit(130)
     })
@@ -337,7 +361,7 @@ async function main() {
         currentHead = (await runCommand("git", ["rev-parse", "HEAD"], { quiet: true, secrets })).trim()
         return currentHead
       },
-      ensurePreflight: async (resume) => {
+      ensurePreflight: async () => {
         logger.section("发布前检查")
         const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as { name?: unknown }
         if (packageJson.name !== "safecafe")
@@ -345,13 +369,13 @@ async function main() {
         branch =
           (await runCommand("git", ["branch", "--show-current"], { quiet: true, secrets })).trim() || "detached HEAD"
         const status = (await runCommand("git", ["status", "--short"], { quiet: true, secrets })).trim()
-        if (!resume && status) {
+        if (status) {
           throw new Error(`Git worktree must be clean before a new release.\n${status}`)
         }
         await runCommand("pnpm", ["--version"], { quiet: true, secrets })
         await runCommand("pnpm", ["exec", "wrangler", "whoami"], { quiet: true, secrets })
-        if (!resume) assertRequiredEnvironment(environment)
-        logger.success(resume ? "恢复会话检查通过" : "Git、pnpm、Wrangler 和 Filebase 配置检查通过")
+        assertRequiredEnvironment(environment)
+        logger.success("Git、pnpm、Wrangler 和 Filebase 配置检查通过")
         logger.keyValue("分支", branch)
         logger.keyValue("Commit", currentHead)
         logger.keyValue("Cloudflare 项目", projectName)
@@ -410,25 +434,15 @@ async function main() {
       },
       deployCloudflare: async () => {
         logger.section("同步 Cloudflare Pages 服务端配置")
-        const runtimeSecrets = collectCloudflarePagesSecrets(environment)
-        const emptyRuntimeSecrets = cloudflarePagesRuntimeSecretNames.filter((name) => !environment[name]?.trim())
-        if (runtimeSecrets.length) {
-          logger.info(`以 .env / shell 环境为准，同步 ${runtimeSecrets.length} 个非空 runtime 配置`)
-        }
-        for (const { name, value } of runtimeSecrets) {
-          await runCommand(
-            "pnpm",
-            ["exec", "wrangler", "pages", "secret", "put", name, "--project-name", projectName],
-            { input: `${value}\n`, secrets },
-          )
-          logger.success(`已同步 ${name}`)
-        }
-        if (runtimeSecrets.length === 0) logger.warning("未发现可同步的 Cloudflare runtime 配置")
-        if (emptyRuntimeSecrets.length) {
-          logger.warning(
-            `以下 runtime 配置为空，release 不会删除 Cloudflare 线上旧值: ${emptyRuntimeSecrets.join(", ")}`,
-          )
-        }
+        await syncCloudflarePagesRuntimeSecrets({
+          environment,
+          logSuccess: (message) => logger.success(message),
+          logWarning: (message) => logger.warning(message),
+          projectName,
+          releaseEnvFileFound,
+          runCommand,
+          secrets,
+        })
 
         logger.section("部署 Cloudflare Pages")
         const output = await runCommand(
@@ -461,17 +475,6 @@ async function main() {
         logger.info("ENS 已匹配，正在等待 Cloudflare 与 eth.limo 端点同步...")
         await verifyFinalEndpoints(session, fetchWithTimeout)
       },
-      loadSession: async () => {
-        try {
-          return JSON.parse(await readFile(sessionPath, "utf8")) as ReleaseSession
-        } catch (error) {
-          if (isNodeError(error) && error.code === "ENOENT") return null
-          throw error
-        }
-      },
-      saveSession: async (session) => {
-        await writeJsonAtomic(sessionPath, session)
-      },
       sleep: (milliseconds) => new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds)),
       now: () => new Date().toISOString(),
       log: (event, details) => {
@@ -484,7 +487,7 @@ async function main() {
         } else if (event === "version_prepared") {
           logger.versionPrepared(details?.version ?? "unknown")
         } else {
-          logger.complete(sessionPath)
+          logger.complete()
         }
       },
     }
@@ -492,7 +495,6 @@ async function main() {
     await runReleaseWorkflow(args, dependencies)
   } catch (error) {
     logger.failure(redactReleaseError(error, secrets))
-    if (await fileExists(sessionPath)) logger.info("恢复命令: pnpm release --resume")
     process.exitCode = 1
   } finally {
     prompt?.close()
@@ -544,11 +546,10 @@ function createReleaseLogger() {
       line(`    管理入口:    ${managerUrl}`)
       line("")
     },
-    complete(path: string) {
+    complete() {
       line("")
       line(paint(32, "  ✓ 发布与验证全部完成"))
       line(`    Cloudflare、IPFS 和 ${ensName} 已指向同一发布 CID。`)
-      line(`    会话记录: ${path}`)
       line("    生成的 release records 仍需人工审查和提交。")
       line("")
     },
@@ -713,16 +714,6 @@ async function readLatestReleaseVersion(): Promise<string | null> {
     }
   }
   return null
-}
-
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await readFile(path)
-    return true
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return false
-    throw error
-  }
 }
 
 function formatDuration(milliseconds: number): string {

@@ -9,6 +9,7 @@ import {
   extractCloudflareDeploymentUrl,
   type ReleaseWorkflowDependencies,
   runReleaseWorkflow,
+  syncCloudflarePagesRuntimeSecrets,
   verifyFinalEndpoints,
   verifyIpfsGateways,
 } from "./release.ts"
@@ -17,7 +18,6 @@ const defaultArgs: ReleaseArgs = {
   bump: "patch",
   pollIntervalMs: 5_000,
   quick: false,
-  resume: false,
   yes: false,
 }
 
@@ -37,7 +37,6 @@ const releaseRecord = {
 
 function createDependencies(overrides: Partial<ReleaseWorkflowDependencies> = {}) {
   const events: string[] = []
-  const savedSessions: ReleaseSession[] = []
   const ensValues = ["bafyold", "bafyrelease"]
   const dependencies: ReleaseWorkflowDependencies = {
     build: async () => {
@@ -51,14 +50,13 @@ function createDependencies(overrides: Partial<ReleaseWorkflowDependencies> = {}
       events.push("deploy-cloudflare")
       return "https://abc.safecafe.pages.dev"
     },
-    ensurePreflight: async (resume) => {
-      events.push(`preflight:${resume ? "resume" : "new"}`)
+    ensurePreflight: async () => {
+      events.push("preflight")
     },
     getHead: async () => {
       events.push("head")
       return "abc123"
     },
-    loadSession: async () => null,
     log: (event) => events.push(`log:${event}`),
     now: () => "2026-07-11T00:00:00.000Z",
     prepareVersion: async (bump) => {
@@ -79,10 +77,6 @@ function createDependencies(overrides: Partial<ReleaseWorkflowDependencies> = {}
     runChecks: async (quick) => {
       events.push(`checks:${quick ? "quick" : "full"}`)
     },
-    saveSession: async (session) => {
-      savedSessions.push(structuredClone(session))
-      events.push(`save:${session.stage}`)
-    },
     sleep: async () => {
       events.push("sleep")
     },
@@ -94,11 +88,11 @@ function createDependencies(overrides: Partial<ReleaseWorkflowDependencies> = {}
     },
     ...overrides,
   }
-  return { dependencies, events, savedSessions }
+  return { dependencies, events }
 }
 
 test("runReleaseWorkflow executes the complete release in order", async () => {
-  const { dependencies, events, savedSessions } = createDependencies()
+  const { dependencies, events } = createDependencies()
 
   const session = await runReleaseWorkflow(defaultArgs, dependencies)
 
@@ -106,35 +100,27 @@ test("runReleaseWorkflow executes the complete release in order", async () => {
   assert.deepEqual(events, [
     "prepare-version:patch",
     "head",
-    "preflight:new",
+    "preflight",
     "confirm",
     "checks:full",
     "build",
     "publish-ipfs",
-    "save:ipfs_published",
     "verify-ipfs",
     "deploy-cloudflare",
-    "save:cloudflare_deployed",
     "prompt-ens",
-    "save:awaiting_ens",
     "read-ens",
     "log:ens_mismatch",
     "sleep",
     "read-ens",
     "verify-final",
-    "save:verified",
     "log:release_complete",
   ])
   assert.equal(session.stage, "verified")
   assert.equal(session.cloudflareDeploymentUrl, "https://abc.safecafe.pages.dev")
-  assert.deepEqual(
-    savedSessions.map((item) => item.stage),
-    ["ipfs_published", "cloudflare_deployed", "awaiting_ens", "verified"],
-  )
 })
 
 test("runReleaseWorkflow stops after preparing the next version", async () => {
-  const { dependencies, events, savedSessions } = createDependencies({
+  const { dependencies, events } = createDependencies({
     prepareVersion: async (bump) => {
       events.push(`prepare-version:${bump}`)
       return "0.1.1"
@@ -145,98 +131,21 @@ test("runReleaseWorkflow stops after preparing the next version", async () => {
 
   assert.equal(session, null)
   assert.deepEqual(events, ["prepare-version:patch", "log:version_prepared"])
-  assert.equal(savedSessions.length, 0)
 })
 
-test("runReleaseWorkflow does not create a session before IPFS succeeds", async () => {
-  const { dependencies, savedSessions } = createDependencies({
+test("runReleaseWorkflow stops when the build fails", async () => {
+  const { dependencies } = createDependencies({
     build: async () => {
       throw new Error("build failed")
     },
   })
 
   await assert.rejects(() => runReleaseWorkflow(defaultArgs, dependencies), /build failed/)
-  assert.equal(savedSessions.length, 0)
-})
-
-test("runReleaseWorkflow preserves the session after IPFS succeeds", async () => {
-  const { dependencies, savedSessions } = createDependencies({
-    verifyIpfsRelease: async () => {
-      throw new Error("gateway unavailable")
-    },
-  })
-
-  await assert.rejects(() => runReleaseWorkflow({ ...defaultArgs, yes: true }, dependencies), /gateway unavailable/)
-  assert.deepEqual(
-    savedSessions.map((item) => item.stage),
-    ["ipfs_published"],
-  )
-})
-
-test("resume skips completed work and retries an unfinished Cloudflare deploy", async () => {
-  const existingSession: ReleaseSession = {
-    version: 1,
-    commit: "abc123",
-    cid: "bafyrelease",
-    uri: "ipfs://bafyrelease",
-    cloudflareDeploymentUrl: null,
-    stage: "ipfs_published",
-    createdAt: "2026-07-11T00:00:00.000Z",
-    updatedAt: "2026-07-11T00:00:00.000Z",
-  }
-  const { dependencies, events } = createDependencies({
-    loadSession: async () => existingSession,
-    readEnsCid: async () => "bafyrelease",
-  })
-
-  await runReleaseWorkflow({ ...defaultArgs, resume: true }, dependencies)
-
-  assert.equal(events.includes("prepare-version:patch"), false)
-  assert.equal(events.includes("checks:full"), false)
-  assert.equal(events.includes("build"), false)
-  assert.equal(events.includes("publish-ipfs"), false)
-  assert.equal(events.includes("verify-ipfs"), true)
-  assert.equal(events.includes("deploy-cloudflare"), true)
-})
-
-test("resume from the ENS stage does not redeploy", async () => {
-  const existingSession: ReleaseSession = {
-    version: 1,
-    commit: "abc123",
-    cid: "bafyrelease",
-    uri: "ipfs://bafyrelease",
-    cloudflareDeploymentUrl: "https://abc.safecafe.pages.dev",
-    stage: "awaiting_ens",
-    createdAt: "2026-07-11T00:00:00.000Z",
-    updatedAt: "2026-07-11T00:00:00.000Z",
-  }
-  const { dependencies, events } = createDependencies({
-    loadSession: async () => existingSession,
-    readEnsCid: async () => "bafyrelease",
-  })
-
-  await runReleaseWorkflow({ ...defaultArgs, resume: true }, dependencies)
-
-  assert.equal(events.includes("verify-ipfs"), false)
-  assert.equal(events.includes("deploy-cloudflare"), false)
-  assert.equal(events.includes("prompt-ens"), true)
-  assert.equal(events.includes("verify-final"), true)
 })
 
 test("ENS polling survives a transient RPC error", async () => {
-  const existingSession: ReleaseSession = {
-    version: 1,
-    commit: "abc123",
-    cid: "bafyrelease",
-    uri: "ipfs://bafyrelease",
-    cloudflareDeploymentUrl: "https://abc.safecafe.pages.dev",
-    stage: "awaiting_ens",
-    createdAt: "2026-07-11T00:00:00.000Z",
-    updatedAt: "2026-07-11T00:00:00.000Z",
-  }
   let attempts = 0
   const { dependencies, events } = createDependencies({
-    loadSession: async () => existingSession,
     readEnsCid: async () => {
       attempts += 1
       if (attempts === 1) throw new Error("RPC timeout")
@@ -244,7 +153,7 @@ test("ENS polling survives a transient RPC error", async () => {
     },
   })
 
-  await runReleaseWorkflow({ ...defaultArgs, resume: true }, dependencies)
+  await runReleaseWorkflow({ ...defaultArgs, yes: true }, dependencies)
 
   assert.equal(events.includes("log:ens_check_error"), true)
   assert.equal(events.includes("sleep"), true)
@@ -252,19 +161,8 @@ test("ENS polling survives a transient RPC error", async () => {
 })
 
 test("final endpoint verification retries while gateway caches settle", async () => {
-  const existingSession: ReleaseSession = {
-    version: 1,
-    commit: "abc123",
-    cid: "bafyrelease",
-    uri: "ipfs://bafyrelease",
-    cloudflareDeploymentUrl: "https://abc.safecafe.pages.dev",
-    stage: "awaiting_ens",
-    createdAt: "2026-07-11T00:00:00.000Z",
-    updatedAt: "2026-07-11T00:00:00.000Z",
-  }
   let attempts = 0
   const { dependencies, events } = createDependencies({
-    loadSession: async () => existingSession,
     readEnsCid: async () => "bafyrelease",
     verifyFinalRelease: async () => {
       attempts += 1
@@ -272,7 +170,7 @@ test("final endpoint verification retries while gateway caches settle", async ()
     },
   })
 
-  await runReleaseWorkflow({ ...defaultArgs, resume: true }, dependencies)
+  await runReleaseWorkflow({ ...defaultArgs, yes: true }, dependencies)
 
   assert.equal(events.includes("log:final_check_error"), true)
   assert.equal(events.includes("sleep"), true)
@@ -285,6 +183,51 @@ test("extractCloudflareDeploymentUrl reads the Wrangler deployment URL", () => {
   )
   assert.equal(extractCloudflareDeploymentUrl(output), "https://8f20a1c2.safecafe.pages.dev")
   assert.throws(() => extractCloudflareDeploymentUrl("Deployment complete without URL"), /deployment URL/)
+})
+
+test("syncCloudflarePagesRuntimeSecrets lists, puts, and deletes known secrets when .env is authoritative", async () => {
+  const commands: Array<{ args: string[]; input?: string }> = []
+  await syncCloudflarePagesRuntimeSecrets({
+    environment: {
+      SAFECAFE_AUTH_SECRET: "new-auth-secret",
+      SAFECAFE_LLM_API_KEY: "",
+    },
+    logSuccess: () => {},
+    logWarning: () => {},
+    projectName: "safecafe",
+    releaseEnvFileFound: true,
+    runCommand: async (_command, args, options = {}) => {
+      commands.push({ args, input: options.input })
+      if (args.includes("list")) {
+        return [
+          'The "production" environment of your Pages project "safecafe" has access to the following secrets:',
+          "  - SAFECAFE_AUTH_SECRET: Value Encrypted",
+          "  - SAFECAFE_LLM_API_KEY: Value Encrypted",
+          "  - UNRELATED_SECRET: Value Encrypted",
+        ].join("\n")
+      }
+      return ""
+    },
+    secrets: [],
+  })
+
+  assert.deepEqual(
+    commands.map((item) => ({ args: item.args, input: item.input })),
+    [
+      {
+        args: ["exec", "wrangler", "pages", "secret", "list", "--project-name", "safecafe"],
+        input: undefined,
+      },
+      {
+        args: ["exec", "wrangler", "pages", "secret", "put", "SAFECAFE_AUTH_SECRET", "--project-name", "safecafe"],
+        input: "new-auth-secret\n",
+      },
+      {
+        args: ["exec", "wrangler", "pages", "secret", "delete", "SAFECAFE_LLM_API_KEY", "--project-name", "safecafe"],
+        input: "y\n",
+      },
+    ],
+  )
 })
 
 test("verifyIpfsGateways checks index and manifest through two gateways", async () => {

@@ -4,41 +4,28 @@ import {
   collectCloudflarePagesSecrets,
   createReleaseOutputRedactor,
   decodeIpfsContenthash,
+  extractCloudflarePagesSecretNames,
   parseReleaseArgs,
+  planCloudflarePagesSecretSync,
   planReleaseVersion,
-  type ReleaseSession,
   redactReleaseError,
   renderSafecafeVersionModule,
-  validateReleaseSession,
 } from "./core"
-
-const session: ReleaseSession = {
-  version: 1,
-  commit: "abc123",
-  cid: "bafyrelease",
-  uri: "ipfs://bafyrelease",
-  cloudflareDeploymentUrl: null,
-  stage: "ipfs_published",
-  createdAt: "2026-07-11T00:00:00.000Z",
-  updatedAt: "2026-07-11T00:00:00.000Z",
-}
 
 test("parseReleaseArgs returns production-safe defaults", () => {
   assert.deepEqual(parseReleaseArgs([]), {
     bump: "patch",
     pollIntervalMs: 15_000,
     quick: false,
-    resume: false,
     yes: false,
   })
 })
 
 test("parseReleaseArgs accepts supported flags", () => {
-  assert.deepEqual(parseReleaseArgs(["--resume", "--yes", "--quick", "--bump=minor", "--poll-interval=7"]), {
+  assert.deepEqual(parseReleaseArgs(["--yes", "--quick", "--bump=minor", "--poll-interval=7"]), {
     bump: "minor",
     pollIntervalMs: 7_000,
     quick: true,
-    resume: true,
     yes: true,
   })
 })
@@ -47,6 +34,7 @@ test("parseReleaseArgs rejects unsafe or unknown values", () => {
   assert.throws(() => parseReleaseArgs(["--poll-interval=4"]), /at least 5 seconds/)
   assert.throws(() => parseReleaseArgs(["--poll-interval=abc"]), /whole number/)
   assert.throws(() => parseReleaseArgs(["--bump=banana"]), /Version bump/)
+  assert.throws(() => parseReleaseArgs(["--resume"]), /Unknown release option/)
   assert.throws(() => parseReleaseArgs(["--unknown"]), /Unknown release option/)
 })
 
@@ -108,14 +96,34 @@ test("collectCloudflarePagesSecrets returns only deploy runtime secrets", () => 
   )
 })
 
-test("validateReleaseSession accepts the matching release commit", () => {
-  assert.deepEqual(validateReleaseSession(session, "abc123"), session)
+test("strict Cloudflare secret sync deletes only known secrets omitted from .env", () => {
+  const plan = planCloudflarePagesSecretSync(
+    {
+      SAFECAFE_AUTH_SECRET: "new-auth-secret",
+      SAFECAFE_LLM_API_KEY: "",
+    },
+    ["SAFECAFE_AUTH_SECRET", "SAFECAFE_LLM_API_KEY", "UNRELATED_SECRET"],
+    true,
+  )
+
+  assert.deepEqual(plan.put, [{ name: "SAFECAFE_AUTH_SECRET", value: "new-auth-secret" }])
+  assert.deepEqual(plan.delete, ["SAFECAFE_LLM_API_KEY"])
 })
 
-test("validateReleaseSession rejects stale or malformed sessions", () => {
-  assert.throws(() => validateReleaseSession(session, "def456"), /belongs to commit abc123/)
-  assert.throws(() => validateReleaseSession({ ...session, version: 2 }, "abc123"), /Unsupported release session/)
-  assert.throws(() => validateReleaseSession({ ...session, stage: "unknown" }, "abc123"), /Invalid release session/)
+test("non-strict Cloudflare secret sync never deletes missing shell values", () => {
+  const plan = planCloudflarePagesSecretSync({}, ["SAFECAFE_LLM_API_KEY"], false)
+  assert.deepEqual(plan, { delete: [], put: [] })
+})
+
+test("extractCloudflarePagesSecretNames reads Wrangler output", () => {
+  assert.deepEqual(
+    extractCloudflarePagesSecretNames(`
+The production environment has access to the following secrets:
+  - SAFECAFE_AUTH_SECRET: Value Encrypted
+  - SAFECAFE_LLM_API_KEY: Value Encrypted
+`),
+    ["SAFECAFE_AUTH_SECRET", "SAFECAFE_LLM_API_KEY"],
+  )
 })
 
 test("decodeIpfsContenthash decodes the IPFS namespace and rejects other namespaces", () => {

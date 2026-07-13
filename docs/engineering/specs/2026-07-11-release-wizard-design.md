@@ -12,7 +12,7 @@
 - 复用现有 `scripts/publish-ipfs.mjs --skip-build`，不复制 Filebase 上传和 release record 生成逻辑。
 - 使用 Node.js 内置 `readline/promises` 实现交互，不引入新的提示库。
 - 使用 ANSI 颜色和统一日志函数展示阶段、成功、警告、失败、耗时及待人工操作状态。
-- 发布会话保存在被 Git 忽略的 `dist/release-session.json`，用于从 ENS 等待阶段恢复，避免重复上传 IPFS。
+- 发布采用单次线性流程，不保存可恢复会话；中断后从干净工作区重新运行，避免恢复状态与实际构建产物不一致。
 
 ## 发布流程
 
@@ -33,27 +33,15 @@
 ## 交互与参数
 
 - 默认命令：`pnpm release`。
-- `--resume`：读取 `dist/release-session.json`，从最后一个可恢复阶段继续。
 - `--yes`：跳过初始发布确认，但不能跳过人工 ENS 更新。
 - `--quick`：只运行 `pnpm check`，省略完整发布测试；默认执行完整发布检查。
 - `--bump=patch|minor|major`：当前版本已发布时要准备的版本类型，默认为 `patch`。
 - `--poll-interval=<秒>`：配置 ENS 检查间隔，默认 15 秒，最小 5 秒。
-- `Ctrl+C` 可安全退出；已生成的会话状态保留，后续使用 `--resume`。
+- `Ctrl+C` 可安全退出；后续从干净工作区重新运行完整发布流程。
 
-## 会话状态
+## 中断处理
 
-`dist/release-session.json` 只记录非敏感数据：
-
-- schema version
-- release commit
-- IPFS CID 和 URI
-- Cloudflare deployment URL
-- 当前阶段
-- 创建与更新时间
-
-恢复时必须确认会话 commit 与当前 HEAD 一致。若不一致，拒绝恢复，避免将旧 CID 误认为当前发布。恢复流程允许 IPFS 发布脚本已经生成的 release record 和文档改动，不再次执行初始 clean-worktree 检查。
-
-恢复会根据阶段继续：IPFS 已发布但 Cloudflare 未部署时重试 Cloudflare；Cloudflare 已部署时直接回到人工 ENS 提示和轮询；已经验证完成时只展示完成摘要。
+发布流程不提供阶段恢复。中断后重新运行会重新执行检查、构建、IPFS 上传和 Cloudflare 部署，确保 Cloudflare 与 ENS/IPFS 来自同一份当前构建产物。
 
 ## ENS 验证
 
@@ -66,13 +54,13 @@
 ## 错误处理
 
 - 前置检查、测试、构建、IPFS 上传或 Cloudflare 部署失败时立即停止。
-- IPFS 发布成功后发生的失败必须保留会话，允许恢复。
+- 任意阶段失败后停止；修复原因并从干净工作区重新运行完整流程。
 - 日志不得打印 Filebase token、secret 或其他 `.env` 密钥。
-- 每个失败输出当前阶段、简短原因和建议恢复命令。
+- 每个失败输出当前阶段和简短原因。
 
 ## 验证
 
-- 为参数解析、会话校验、CID 比较和日志脱敏增加针对性测试。
+- 为参数解析、CID 比较、secret 同步计划和日志脱敏增加针对性测试。
 - 使用子进程注入或 dry-run fixture 验证步骤顺序，不执行真实上传和部署。
 - 运行 Biome、TypeScript 检查和发布向导测试。
 - 不在自动测试中更新 ENS、上传 IPFS 或部署 Cloudflare。
@@ -81,4 +69,3 @@
 
 - 在 `package.json` 增加 `release` 和发布向导测试命令。
 - 更新 `CLOUDFLARE.md`，将 `pnpm release` 作为推荐生产发布入口，同时保留底层命令供故障恢复。
-- 更新 `.gitignore`，确保发布会话文件不会进入版本控制。

@@ -18,6 +18,7 @@ import {
   toAgentChatContext,
 } from "../src/agent/index.ts"
 import { chainActionBusyLabel, chainTxStepStatuses } from "../src/app/actionStatus.ts"
+import { readableRpcAuthError, readableSimulationError } from "../src/app/formatters.ts"
 import { readCachedLiveData, writeCachedLiveData } from "../src/app/liveDataCache.ts"
 import {
   appStorageKeys,
@@ -33,6 +34,7 @@ import {
   writeStoredWalletSubject,
 } from "../src/app/persistence.ts"
 import { resolveEnsTrustStatus } from "../src/app/releaseTrust.ts"
+import { RpcAuthError } from "../src/app/rpcAuth.ts"
 import { defaultSafeSubjectInput } from "../src/app/safeSelection.ts"
 import { isUserSafeApiKeyRejected, resolveUserSafeApiSave } from "../src/app/userSafeApiKey.ts"
 import { findPreferredRestakeValidator } from "../src/app/validatorSelection.ts"
@@ -483,11 +485,66 @@ assert.deepEqual(chainTxStepStatuses(["Claim Merkle rewards", "Stake SAFE to val
 const appSource = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8")
 const viewsSource = readFileSync(new URL("../src/app/views.tsx", import.meta.url), "utf8")
 const uiSource = readFileSync(new URL("../src/app/ui.tsx", import.meta.url), "utf8")
+const rpcAuthSource = readFileSync(new URL("../src/app/rpcAuth.ts", import.meta.url), "utf8")
+const zhMessages = JSON.parse(readFileSync(new URL("../src/app/locales/zh.json", import.meta.url), "utf8"))
 const releaseTrustSource = readFileSync(new URL("../src/app/releaseTrust.ts", import.meta.url), "utf8")
 const publishIpfsSource = readFileSync(new URL("../scripts/publish-ipfs.mjs", import.meta.url), "utf8")
 const publicReleaseRecord = readFileSync(new URL("../public/release-record.json", import.meta.url), "utf8")
 const sourceReleaseRecord = readFileSync(new URL("../releases/ipfs/latest.json", import.meta.url), "utf8")
 assert.equal(publicReleaseRecord, sourceReleaseRecord, "Static release record should match the source IPFS record.")
+assert.match(rpcAuthSource, /export class RpcAuthError extends Error/)
+assert.match(rpcAuthSource, /resetAt\?: string/)
+assert.match(
+  appSource,
+  /readableRpcAuthError\(error, t\.agentAuthFailed, t, locale\)/,
+  "RPC sign-in rate limits should use the shared localized UI copy.",
+)
+assert.match(
+  appSource,
+  /message: readableRpcAuthError\(error, t\.agentAuthFailed, t, locale\)/,
+  "RPC auth failures during simulation should preserve localized retry guidance.",
+)
+assert.match(
+  appSource,
+  /error\.status === 404 \|\| error\.status === 405 \|\| error\.status >= 500/,
+  "Hosted account API server errors should fall back to direct public RPC reads.",
+)
+assert.match(
+  appSource,
+  /error instanceof ApiResponseError && error\.code === "ip_rate_limited"[\s\S]*formatRateLimitMessage/,
+  "Account API rate limits should preserve explicit localized retry guidance.",
+)
+assert.equal(zhMessages.agentIpRateLimitExceeded, "当前网络的 Staking Agent 请求过于频繁，请在 {resetAt} 后再试。")
+assert.equal(zhMessages.requestRateLimited, "请求过于频繁，请稍后再试。")
+assert.equal(zhMessages.requestRateLimitedWithReset, "请求过于频繁，请在 {resetAt} 后再试。")
+assert.equal(
+  readableRpcAuthError(
+    new RpcAuthError(429, "RPC authentication failed: 429", {
+      code: "ip_rate_limited",
+      resetAt: "2026-07-13T08:00:00.000Z",
+    }),
+    "认证失败。",
+    zhMessages,
+    "zh-CN",
+  ),
+  zhMessages.requestRateLimitedWithReset.replace(
+    "{resetAt}",
+    new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(
+      new Date("2026-07-13T08:00:00.000Z"),
+    ),
+  ),
+)
+assert.equal(
+  readableSimulationError(
+    {
+      shortMessage: "HTTP request failed.",
+      details: JSON.stringify({ error: { data: { reason: "ip_rate_limited" } } }),
+    },
+    "交易失败。",
+    "请求过于频繁，请稍后再试。",
+  ),
+  "请求过于频繁，请稍后再试。",
+)
 assert.match(
   releaseTrustSource,
   /readReleaseJson\("\/release-record\.json", "\/latest\.json"\)/,
@@ -693,6 +750,11 @@ assert.match(
 )
 
 const agentDialogSource = readFileSync(new URL("../src/app/AgentChatDialog.tsx", import.meta.url), "utf8")
+assert.match(
+  agentDialogSource,
+  /error\.code === "ip_rate_limited"[\s\S]*agentIpRateLimitExceeded/,
+  "Agent IP rate limits should use localized retry guidance.",
+)
 const agentComposerSource = agentDialogSource.match(
   /<div className="agent-dialog-footer"[\s\S]*?\n {6}\{isStopConfirmOpen &&/,
 )?.[0]
@@ -2004,6 +2066,70 @@ try {
   assert.equal(session.signer, testAccount.address)
   assert.equal(session.subject, testAccount.address)
   assert.equal(session.subjectKind, "self")
+
+  const ineligibleAccount = privateKeyToAccount(`0x${"22".repeat(32)}`)
+  const ineligibleChallengeResponse = await handleRpcChallengeRequest(
+    new Request("http://localhost/api/auth/challenge", {
+      method: "POST",
+      body: JSON.stringify({ address: ineligibleAccount.address, chainId: 1 }),
+    }),
+    { SAFECAFE_AUTH_SECRET: "test-secret", SAFECAFE_RPC_ALLOW_ALL_WALLETS: "true" },
+  )
+  const ineligibleChallenge = await ineligibleChallengeResponse.json()
+  const ineligibleSignature = await ineligibleAccount.signMessage({ message: ineligibleChallenge.message })
+  const ineligibleVerifyResponse = await handleRpcVerifyRequest(
+    new Request("http://localhost/api/auth/verify", {
+      method: "POST",
+      body: JSON.stringify({
+        address: ineligibleAccount.address,
+        challenge: ineligibleChallenge.challenge,
+        message: ineligibleChallenge.message,
+        signature: ineligibleSignature,
+      }),
+    }),
+    { SAFECAFE_AUTH_SECRET: "test-secret", SAFECAFE_RPC_ALLOW_ALL_WALLETS: "true" },
+  )
+  assert.equal(ineligibleVerifyResponse.status, 200)
+  const ineligibleSession = await ineligibleVerifyResponse.json()
+
+  const eligibleFetch = globalThis.fetch
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes("chainid.network")) return mockFetch(url, init)
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (body.method === "eth_call") {
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: `0x${"0".repeat(64)}` }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }
+    return mockFetch(url, init)
+  }
+  const ineligibleAgentResponse = await handleAgentApiRequest(
+    new Request("http://localhost/api/agent", {
+      method: "POST",
+      headers: { authorization: `Bearer ${ineligibleSession.token}` },
+      body: JSON.stringify({
+        message: "hello",
+        context: {
+          account: ineligibleAccount.address,
+          subjectAccount: ineligibleAccount.address,
+          agentAccess: "eligible",
+          hasLiveSnapshot: true,
+          validatorLabels: [],
+        },
+      }),
+    }),
+    {
+      SAFECAFE_AUTH_SECRET: "test-secret",
+      SAFECAFE_RPC_ALLOW_ALL_WALLETS: "true",
+      SAFECAFE_LLM_API_BASE: "https://llm.example",
+      SAFECAFE_LLM_API_MODEL: "test",
+      SAFECAFE_LLM_API_KEY: "secret",
+    },
+  )
+  assert.equal(ineligibleAgentResponse.status, 403)
+  assert.equal((await ineligibleAgentResponse.json()).code, "agent_access_denied")
+  globalThis.fetch = eligibleFetch
 
   const authenticatedAgentResponse = await handleAgentApiRequest(
     new Request("http://localhost/api/agent", {
