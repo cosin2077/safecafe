@@ -360,14 +360,14 @@ The project intentionally does not set a strict Content Security Policy yet beca
 <!-- ipfs-latest:start -->
 ## Latest IPFS Release
 
-- Version: `0.2.1`
-- Commit: `223f0f9d9a4827e951cf7667558b5f98b2d94c81`
+- Version: `0.3.0`
+- Commit: `128078422b092d8eeb251c0c91139f84c6906ac1`
 - Dirty build: `no`
-- CID: `bafybeiai3ugp2p2wou3jgixhjmaakt2feiyia7kqp4wwzdy7cyfxmy7cua`
-- ENS contenthash: `ipfs://bafybeiai3ugp2p2wou3jgixhjmaakt2feiyia7kqp4wwzdy7cyfxmy7cua`
-- Filebase: https://ipfs.filebase.io/ipfs/bafybeiai3ugp2p2wou3jgixhjmaakt2feiyia7kqp4wwzdy7cyfxmy7cua/
-- dweb.link: https://bafybeiai3ugp2p2wou3jgixhjmaakt2feiyia7kqp4wwzdy7cyfxmy7cua.ipfs.dweb.link/
-- Build manifest: https://ipfs.filebase.io/ipfs/bafybeiai3ugp2p2wou3jgixhjmaakt2feiyia7kqp4wwzdy7cyfxmy7cua/release-manifest.json
+- CID: `bafybeiakbd3huvun24mlh7saqbyc74bq3s4ogjoeezxoitpwwxhdsdn4xa`
+- ENS contenthash: `ipfs://bafybeiakbd3huvun24mlh7saqbyc74bq3s4ogjoeezxoitpwwxhdsdn4xa`
+- Filebase: https://ipfs.filebase.io/ipfs/bafybeiakbd3huvun24mlh7saqbyc74bq3s4ogjoeezxoitpwwxhdsdn4xa/
+- dweb.link: https://bafybeiakbd3huvun24mlh7saqbyc74bq3s4ogjoeezxoitpwwxhdsdn4xa.ipfs.dweb.link/
+- Build manifest: https://ipfs.filebase.io/ipfs/bafybeiakbd3huvun24mlh7saqbyc74bq3s4ogjoeezxoitpwwxhdsdn4xa/release-manifest.json
 - Release record: [../releases/ipfs/latest.json](../releases/ipfs/latest.json)
 
 After verifying the links, set `safe-staking.eth` contenthash to the ENS contenthash above.

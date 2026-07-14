@@ -192,9 +192,9 @@ If the current version is already published, the first run prepares the next pat
 <!-- ipfs-latest:start -->
 ## Latest IPFS Release
 
-- CID: `bafybeiai3ugp2p2wou3jgixhjmaakt2feiyia7kqp4wwzdy7cyfxmy7cua`
-- ENS contenthash: `ipfs://bafybeiai3ugp2p2wou3jgixhjmaakt2feiyia7kqp4wwzdy7cyfxmy7cua`
-- Filebase: https://ipfs.filebase.io/ipfs/bafybeiai3ugp2p2wou3jgixhjmaakt2feiyia7kqp4wwzdy7cyfxmy7cua/
+- CID: `bafybeiakbd3huvun24mlh7saqbyc74bq3s4ogjoeezxoitpwwxhdsdn4xa`
+- ENS contenthash: `ipfs://bafybeiakbd3huvun24mlh7saqbyc74bq3s4ogjoeezxoitpwwxhdsdn4xa`
+- Filebase: https://ipfs.filebase.io/ipfs/bafybeiakbd3huvun24mlh7saqbyc74bq3s4ogjoeezxoitpwwxhdsdn4xa/
 - Release record: [releases/ipfs/latest.json](releases/ipfs/latest.json)
 
 <!-- ipfs-latest:end -->
